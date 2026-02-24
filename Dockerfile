@@ -13,5 +13,5 @@ COPY main.py .
 ENV PORT=8000
 EXPOSE ${PORT}
 
-# Start with shell to expand $PORT
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port $PORT"]
+# Start server
+CMD sh -c "uvicorn main:app --host 0.0.0.0 --port ${PORT}"

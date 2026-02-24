@@ -4,32 +4,49 @@ Analysiert PDFs und Bilder mit GPT-4o Vision
 """
 
 import os
+import sys
 import base64
 import json
 import io
-from dotenv import load_dotenv
+
+# Logging als erstes
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    stream=sys.stdout
+)
+logger = logging.getLogger(__name__)
+
+logger.info("=== Document Analyzer Service Starting ===")
+logger.info(f"Python version: {sys.version}")
+logger.info(f"PORT env: {os.getenv('PORT', 'not set')}")
+logger.info(f"OPENAI_API_KEY set: {bool(os.getenv('OPENAI_API_KEY'))}")
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    logger.info("dotenv loaded")
+except Exception as e:
+    logger.warning(f"dotenv not available: {e}")
+
 from pypdf import PdfReader
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 from openai import OpenAI
 from pydantic import BaseModel
 from typing import Optional
-import logging
-
-# .env Datei laden
-load_dotenv()
-
-# Logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Document Analyzer", version="1.0.0")
 
 # OpenAI Client
 api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
-    logger.error("OPENAI_API_KEY nicht gesetzt! Erstelle .env Datei mit OPENAI_API_KEY=sk-...")
-client = OpenAI(api_key=api_key) if api_key else None
+    logger.warning("OPENAI_API_KEY nicht gesetzt! /analyze wird nicht funktionieren.")
+    client = None
+else:
+    logger.info("OpenAI client initialized")
+    client = OpenAI(api_key=api_key)
 
 # Dokument-Typen für Klassifizierung
 DOC_TYPES = [
