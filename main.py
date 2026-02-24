@@ -731,6 +731,7 @@ class EuropaceResponse(BaseModel):
     validation_warnings: list = []
     is_valid: bool = False
     debug_effective_view: Optional[dict] = None  # Temporarily for debugging
+    debug_answers_user: Optional[dict] = None  # Temporarily for debugging
 
 
 @app.post("/build-europace-payload", response_model=EuropaceResponse)
@@ -756,11 +757,10 @@ async def build_europace_payload(request: EuropaceRequest):
 
     effective_view = compute_effective_view(case_data)
 
-    # Debug logging
-    logger.info(f"case_data keys: {case_data.keys()}")
-    logger.info(f"facts_extracted: {request.facts_extracted}")
-    logger.info(f"answers_user: {request.answers_user}")
-    logger.info(f"effective_view: {effective_view}")
+    # Debug: Show all intermediate values
+    answers_debug = case_data.get("answers_user", {})
+    logger.info(f"DEBUG answers_user from request: {answers_debug}")
+    logger.info(f"DEBUG effective_view: {effective_view}")
 
     def get_value(primary, *fallbacks):
         """Get value with fallback paths"""
@@ -993,7 +993,8 @@ async def build_europace_payload(request: EuropaceRequest):
         validation_errors=errors,
         validation_warnings=warnings,
         is_valid=is_valid,
-        debug_effective_view=effective_view  # Remove after debugging
+        debug_effective_view=effective_view,  # Remove after debugging
+        debug_answers_user=request.answers_user  # Remove after debugging
     )
 
 
