@@ -824,8 +824,12 @@ async def build_europace_payload(request: EuropaceRequest):
         if kunde2.get("personendaten", {}).get("vorname") or kunde2.get("personendaten", {}).get("nachname"):
             kunden.append(kunde2)
 
-    # Build payload
-    kaufpreis = get_value("purchase_price", "financing_data.purchase_price")
+    # Build payload - mit allen möglichen Pfaden für jeden Wert
+    kaufpreis = get_value("purchase_price", "property_data.purchase_price", "financing_data.purchase_price")
+    loan_amount = get_value("loan_amount", "financing_data.loan_amount")
+    equity = get_value("equity_to_use", "financing_data.equity_to_use", "equity")
+    object_type = get_value("object_type", "property_data.object_type")
+    usage = get_value("usage", "property_data.usage")
 
     payload = {
         "kundenangaben": {
@@ -833,35 +837,35 @@ async def build_europace_payload(request: EuropaceRequest):
                 "kunden": kunden,
                 "finanzielleSituation": {
                     "vermoegen": {
-                        "summeBankUndSparguthaben": get_value("assets.bank_savings"),
-                        "summeBausparvertraege": get_value("assets.bauspar")
+                        "summeBankUndSparguthaben": get_value("assets.bank_savings", "bank_savings"),
+                        "summeBausparvertraege": get_value("assets.bauspar", "bauspar")
                     }
                 },
                 "finanzbedarf": {
                     "fahrzeuge": {
-                        "anzahlPKWGesamt": get_value("household_data.cars_in_household") or 0
+                        "anzahlPKWGesamt": get_value("household_data.cars_in_household", "cars_in_household") or 0
                     }
                 }
             }],
             "finanzierungsobjekt": {
                 "immobilie": {
-                    "objektart": map_enum(get_value("object_type"), EUROPACE_ENUMS["objektart"]),
-                    "nutzungsart": map_enum(get_value("usage"), EUROPACE_ENUMS["nutzungsart"]),
+                    "objektart": map_enum(object_type, EUROPACE_ENUMS["objektart"]),
+                    "nutzungsart": map_enum(usage, EUROPACE_ENUMS["nutzungsart"]),
                     "adresse": {
-                        "strasse": get_value("property_data.street"),
-                        "hausnummer": get_value("property_data.house_number"),
-                        "plz": get_value("property_data.zip"),
-                        "ort": get_value("property_data.city")
+                        "strasse": get_value("property_data.street", "object_street"),
+                        "hausnummer": get_value("property_data.house_number", "object_house_number"),
+                        "plz": get_value("property_data.zip", "object_zip"),
+                        "ort": get_value("property_data.city", "object_city")
                     },
-                    "wohnflaeche": get_value("property_data.living_space"),
-                    "baujahr": get_value("property_data.year_built"),
+                    "wohnflaeche": get_value("property_data.living_space", "living_space"),
+                    "baujahr": get_value("property_data.year_built", "year_built"),
                     "kaufpreis": kaufpreis,
-                    "marktwert": get_value("property_data.market_value") or kaufpreis
+                    "marktwert": get_value("property_data.market_value", "market_value") or kaufpreis
                 }
             },
             "finanzierungswunsch": {
-                "darlehenssumme": get_value("loan_amount", "financing_data.loan_amount"),
-                "eigenkapital": get_value("equity_to_use", "financing_data.equity_to_use"),
+                "darlehenssumme": loan_amount,
+                "eigenkapital": equity,
                 "zinsbindungInJahren": get_value("zinsbindung") or 10,
                 "wunschrate": get_value("wunschrate")
             }
