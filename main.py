@@ -388,13 +388,23 @@ def compute_effective_view(case_data: dict) -> dict:
     facts_extracted = safe_json_parse(case_data.get("facts_extracted", "{}"))
     derived_values = safe_json_parse(case_data.get("derived_values", "{}"))
 
-    # Flatten answers_user
+    # Flatten answers_user (handle both nested partner/broker and flat keys)
     answers_user = {}
+    # First: nested keys under partner/broker
     for section in ["partner", "broker"]:
         if section in answers_user_raw and isinstance(answers_user_raw[section], dict):
             for k, v in answers_user_raw[section].items():
                 if not k.startswith("_") and v is not None:
                     answers_user[k] = v
+    # Second: flat keys at top level (higher priority)
+    for k, v in answers_user_raw.items():
+        if k in ["partner", "broker", "_meta"] or k.startswith("_"):
+            continue
+        if v is not None and not isinstance(v, dict):
+            answers_user[k] = v
+        elif isinstance(v, dict):
+            # Also include nested dicts at top level
+            answers_user[k] = v
 
     # Priority merge: derived < facts < answers < manual
     result = {}
