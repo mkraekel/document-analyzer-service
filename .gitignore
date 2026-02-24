@@ -1,0 +1,14 @@
+# Environment
+.env
+venv/
+__pycache__/
+*.pyc
+
+# Test files
+test.pdf
+test_gehalt.pdf
+service.log
+
+# IDE
+.vscode/
+.idea/
