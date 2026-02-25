@@ -1848,11 +1848,15 @@ async def debug_seatable():
         results["auth"] = f"FAILED: {e}"
         return results
 
+    # Raw GET test
     try:
-        rows = db.list_rows("processed_emails")
-        results["processed_emails"] = f"ok – {len(rows)} rows"
+        import requests as _req
+        token = db._get_access_token()
+        url = db._api("rows/")
+        r = _req.get(url, headers={"Authorization": f"Bearer {token}"}, params={"table_name": "processed_emails", "view_name": "Default View"}, timeout=10)
+        results["list_rows_raw"] = {"status": r.status_code, "url": url, "body": r.text[:400]}
     except Exception as e:
-        results["processed_emails"] = f"FAILED: {e}"
+        results["list_rows_raw"] = f"FAILED: {e}"
 
     try:
         rows = db.list_rows("fin_cases")
