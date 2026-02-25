@@ -53,7 +53,7 @@ def _headers() -> dict:
 
 def _api(path: str) -> str:
     uuid = _get_uuid()
-    return f"{SEATABLE_BASE_URL}/api-gateway/api/v2.1/dtables/{uuid}/{path}"
+    return f"{SEATABLE_BASE_URL}/dtable-server/api/v1/dtables/{uuid}/{path}"
 
 
 def invalidate_token():
