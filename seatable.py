@@ -61,6 +61,9 @@ def _headers() -> dict:
 def _api(path: str) -> str:
     uuid = _get_uuid()
     server = _get_server()
+    # api-gateway verwendet v2.1, dtable-server verwendet v1
+    if "api-gateway" in server:
+        return f"{server}/api/v2.1/dtables/{uuid}/{path}"
     return f"{server}/api/v1/dtables/{uuid}/{path}"
 
 
