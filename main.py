@@ -1860,6 +1860,22 @@ async def debug_seatable():
     except Exception as e:
         results["fin_cases"] = f"FAILED: {e}"
 
+    # Test: Welche Tabellen existieren?
+    try:
+        import requests as _req
+        token = db._get_access_token()
+        uuid = db._get_uuid()
+        server = db._get_server()
+        # Metadata Endpoint um echte Tabellennamen zu sehen
+        r = _req.get(f"{server}/api/v2.1/dtables/{uuid}/metadata/", headers={"Authorization": f"Bearer {token}"}, timeout=10)
+        if r.ok:
+            tables = [t["name"] for t in r.json().get("metadata", {}).get("tables", [])]
+            results["tables_in_base"] = tables
+        else:
+            results["tables_in_base"] = f"{r.status_code}: {r.text[:200]}"
+    except Exception as e:
+        results["tables_in_base"] = f"FAILED: {e}"
+
     # Test: POST (create) direkt testen
     try:
         import requests as _req
