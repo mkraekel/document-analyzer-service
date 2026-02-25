@@ -1047,6 +1047,8 @@ Antworte NUR mit validem JSON:
 
   "mentioned_documents": ["Gehaltsnachweis", "Ausweis", ...],
 
+  "google_drive_links": ["https://drive.google.com/drive/folders/..." oder leere Liste],
+
   "summary": "Kurze Zusammenfassung in einem Satz"
 }}
 """
@@ -1073,6 +1075,7 @@ class EmailParseResponse(BaseModel):
     financing_data: dict = {}
     answered_questions: list = []
     mentioned_documents: list = []
+    google_drive_links: list = []
     summary: Optional[str] = None
     error: Optional[str] = None
 
@@ -1159,6 +1162,7 @@ async def parse_email(request: EmailParseRequest):
             financing_data=result.get("financing_data", {}),
             answered_questions=result.get("answered_questions", []),
             mentioned_documents=result.get("mentioned_documents", []),
+            google_drive_links=result.get("google_drive_links", []),
             summary=result.get("summary")
         )
 
@@ -1901,6 +1905,7 @@ class ProcessEmailResponse(BaseModel):
     onedrive_folder_id: Optional[str] = None
     needs_onedrive_folder: bool = False
     files_to_upload: list = []
+    google_drive_links: list = []
     readiness: Optional[dict] = None
 
 @app.post("/process-email")
@@ -2084,6 +2089,7 @@ Antworte NUR mit JSON:
         onedrive_folder_id=request.onedrive_folder_id,
         needs_onedrive_folder=needs_folder,
         files_to_upload=files_to_upload,
+        google_drive_links=parsed.get("google_drive_links", []),
         readiness=readiness_result,
     )
 
