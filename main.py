@@ -2069,9 +2069,11 @@ Antworte NUR mit JSON:
         for filename, b64_data in request.attachments.items():
             files_to_upload.append({"filename": filename, "data_base64": b64_data})
 
-    # 7. Readiness Check (nur bei Update oder nach kurzer Verarbeitung)
+    # 7. Readiness Check (nur bei Update OHNE neue Anhänge)
+    # Mit Anhängen: Readiness läuft nach jedem /process-document (hat aktuellere Daten)
     readiness_result = None
-    if match["action"] == "update" and not needs_folder:
+    has_attachments = len(files_to_upload) > 0
+    if match["action"] == "update" and not needs_folder and not has_attachments:
         try:
             readiness_result = rdns.check_readiness(case_id)
             notify.dispatch_notifications(case_id, readiness_result)
