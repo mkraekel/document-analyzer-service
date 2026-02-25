@@ -2266,7 +2266,10 @@ async def ingest_answers(request: IngestAnswersRequest):
 
         # Readiness Check
         readiness_result = rdns.check_readiness(request.case_id)
-        notify.dispatch_notifications(request.case_id, readiness_result)
+        try:
+            notify.dispatch_notifications(request.case_id, readiness_result)
+        except Exception as notify_err:
+            logger.error(f"dispatch_notifications failed (non-fatal): {notify_err}")
 
         return IngestAnswersResponse(
             success=True,
@@ -2310,11 +2313,17 @@ async def update_onedrive_folder(request: UpdateOneDriveFolderRequest):
     """n8n meldet erstellten OneDrive-Ordner zurück"""
     try:
         cases.update_onedrive_folder(request.case_id, request.onedrive_folder_id)
-        # Jetzt Readiness Check starten
+        # Readiness Check starten
         result = rdns.check_readiness(request.case_id)
-        notify.dispatch_notifications(request.case_id, result)
+        # Notifications sind nicht-kritisch – Fehler hier dürfen nie einen 500 erzeugen
+        try:
+            notify.dispatch_notifications(request.case_id, result)
+        except Exception as notify_err:
+            logger.error(f"dispatch_notifications failed (non-fatal): {notify_err}")
         return {"success": True, "case_id": request.case_id, "status": result["status"]}
     except Exception as e:
+        tb = traceback.format_exc()
+        logger.error(f"update-onedrive-folder failed: {tb}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

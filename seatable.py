@@ -116,6 +116,14 @@ def create_row(table_name: str, row_data: dict) -> dict:
             json={"table_name": table_name, "rows": [row_data]},
             timeout=15,
         )
+        if resp.status_code == 401:
+            invalidate_token()
+            resp = requests.post(
+                _api("rows/"),
+                headers=_headers(),
+                json={"table_name": table_name, "rows": [row_data]},
+                timeout=15,
+            )
         resp.raise_for_status()
         return resp.json()
     except Exception as e:
@@ -132,6 +140,14 @@ def update_row(table_name: str, row_id: str, row_data: dict) -> dict:
             json={"table_name": table_name, "row_id": row_id, "row": row_data},
             timeout=15,
         )
+        if resp.status_code == 401:
+            invalidate_token()
+            resp = requests.put(
+                _api("rows/"),
+                headers=_headers(),
+                json={"table_name": table_name, "row_id": row_id, "row": row_data},
+                timeout=15,
+            )
         resp.raise_for_status()
         return resp.json()
     except Exception as e:
