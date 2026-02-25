@@ -210,14 +210,24 @@ def send_manual_review(case_id: str, readiness_result: dict, effective_view: dic
     stale = readiness_result.get("stale_docs", [])
     stale_list = "\n".join(f"- {d.get('type', d.get('doc_type', ''))}" for d in stale)
 
+    stale_commands = "\n".join(
+        f"<li><code>ACCEPT_STALE {d.get('type', '')}</code> – veraltetes Dokument akzeptieren</li>"
+        for d in stale
+    )
+
     html_body = f"""<html><body>
 <h3>⚠️ Manuelle Prüfung erforderlich: {case_id}</h3>
 <p>Folgende Dokumente sind veraltet oder abgelaufen:</p>
-<ul>{"".join(f"<li>{d.get('type', d.get('doc_type', ''))}</li>" for d in stale)}</ul>
-<p>Bitte prüfen Sie ob diese Dokumente akzeptiert werden können.</p>
-<p>Antworten Sie mit:<br>
-<code>ACCEPT_STALE [Dokumenttyp]</code> um ein veraltetes Dokument zu akzeptieren<br>
-<code>WAIT_FOR_DOCS</code> um auf neue Dokumente zu warten</p>
+<ul>{"".join(f"<li>{d.get('type', d.get('doc_type', ''))} (vorhanden: {d.get('found',0)}x, benötigt: {d.get('required',1)}x frisch)</li>" for d in stale)}</ul>
+<p>Bitte antworten Sie auf diese E-Mail mit einem oder mehreren der folgenden Kommandos:</p>
+<ul>
+{stale_commands}
+<li><code>ACCEPT_MISSING [Dokumenttyp]</code> – fehlendes Dokument überspringen</li>
+<li><code>WAIT_FOR_DOCS</code> – auf neue Dokumente warten (kein Import)</li>
+<li><code>FREIGABE</code> – alle Checks überspringen und direkt importieren</li>
+</ul>
+<p><small>Mehrere Kommandos können in einer Antwort stehen.</small></p>
+<p>Case-ID: {case_id}</p>
 </body></html>"""
 
     _send_email(

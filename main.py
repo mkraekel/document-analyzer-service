@@ -1970,16 +1970,22 @@ Antworte NUR mit JSON:
   "object_type": "ETW"|"EFH"|"DHH"|"RH"|"MFH"|null,
   "usage": "Eigennutzung"|"Kapitalanlage"|null,
   "extracted_answers": {
-    "APPROVE_IMPORT": true wenn Broker-Antwort "FREIGABE", "GENEHMIGT", "OK", "Freigabe erteilt" oder ähnlich enthält - sonst null,
-    "WAIT_FOR_DOCS": true wenn Broker sagt er wartet auf weitere Dokumente oder "bitte warten" - sonst null,
-    "accept_stale_kontoauszug": true wenn Broker veraltete Kontoauszüge explizit akzeptiert - sonst null,
-    "accept_stale_gehaltsnachweis": true wenn Broker veraltete Gehaltsnachweise explizit akzeptiert - sonst null,
-    "has_joint_account": true wenn Gemeinschaftskonto erwähnt wird - sonst null
+    // Broker-Overrides – NUR bei is_broker_reply=true relevant:
+    // APPROVE_IMPORT: true bei "FREIGABE", "GENEHMIGT", "approved", "ok starten", "Freigabe erteilt"
+    // WAIT_FOR_DOCS: true bei "warte auf Dokumente", "WAIT_FOR_DOCS", "noch nicht vollständig"
+    // has_joint_account: true wenn "Gemeinschaftskonto" oder "gemeinsames Konto" erwähnt
+    // accept_stale_{typ}: true bei "ACCEPT_STALE {Typ}" oder "veraltete {Typ} akzeptiert"
+    //   Beispiele: accept_stale_kontoauszug, accept_stale_gehaltsnachweis, accept_stale_grundbuch
+    //   Namensregel: Dokumenttyp kleingeschrieben, Leerzeichen → Unterstrich
+    // accept_missing_{typ}: true bei "ACCEPT_MISSING {Typ}" oder "{Typ} wird nicht benötigt"
+    //   Beispiele: accept_missing_renteninfo, accept_missing_energieausweis
+    // partnerId: string wenn Broker eine Europace-Partner-ID angibt
+    // Gib NUR die Keys zurück die tatsächlich gesetzt werden sollen (keine null-Werte)
   },
   "notes": string | null
 }
-WICHTIG: Bei is_broker_reply=true besonders auf Freigabe-Keywords achten (FREIGABE, GENEHMIGT, approved, ok, bestätigt).
-Setze APPROVE_IMPORT=true sobald der Broker eine klare Freigabe gibt."""},
+WICHTIG bei is_broker_reply=true: Scanne gezielt nach Kommandos wie FREIGABE, ACCEPT_STALE, ACCEPT_MISSING, WAIT_FOR_DOCS.
+Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Kontoauszug" UND "ACCEPT_MISSING Renteninfo"."""},
                 {"role": "user", "content": f"is_broker_reply: {gate['is_internal_reply']}\n\n{email_text[:4000]}"},
             ],
             response_format={"type": "json_object"},
