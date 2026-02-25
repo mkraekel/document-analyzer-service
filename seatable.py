@@ -1,5 +1,6 @@
 """
 SeaTable API Client
+Neue API Gateway v2 (SeaTable >= 5.3)
 Direkte REST API Anbindung für fin_cases, fin_documents, processed_emails, fin_followups
 """
 
@@ -14,7 +15,7 @@ SEATABLE_BASE_URL = os.getenv("SEATABLE_BASE_URL", "https://cloud.seatable.io")
 SEATABLE_API_TOKEN = os.getenv("SEATABLE_API_TOKEN", "")
 SEATABLE_BASE_UUID = os.getenv("SEATABLE_BASE_UUID", "")
 
-_access_token_cache = {"token": None, "dtable_uuid": None, "dtable_server": None}
+_access_token_cache = {"token": None, "dtable_uuid": None}
 
 
 def _get_access_token() -> str:
@@ -35,12 +36,9 @@ def _get_access_token() -> str:
     data = resp.json()
     token = data["access_token"]
     uuid = data.get("dtable_uuid", SEATABLE_BASE_UUID)
-    # dtable_server ist die korrekte URL für Row-Operationen (kann abweichen!)
-    dtable_server = data.get("dtable_server", "").rstrip("/") or f"{SEATABLE_BASE_URL}/dtable-server"
     _access_token_cache["token"] = token
     _access_token_cache["dtable_uuid"] = uuid
-    _access_token_cache["dtable_server"] = dtable_server
-    logger.info(f"SeaTable auth ok: uuid={uuid}, server={dtable_server}")
+    logger.info(f"SeaTable auth ok: uuid={uuid}")
     return token
 
 
@@ -49,22 +47,14 @@ def _get_uuid() -> str:
     return _access_token_cache["dtable_uuid"] or SEATABLE_BASE_UUID
 
 
-def _get_server() -> str:
-    _get_access_token()
-    return _access_token_cache["dtable_server"] or f"{SEATABLE_BASE_URL}/dtable-server"
-
-
 def _headers() -> dict:
     return {"Authorization": f"Bearer {_get_access_token()}", "Content-Type": "application/json"}
 
 
 def _api(path: str) -> str:
+    """Baut API Gateway v2 URL (SeaTable >= 5.3)"""
     uuid = _get_uuid()
-    server = _get_server()
-    # api-gateway verwendet v2.1, dtable-server verwendet v1
-    if "api-gateway" in server:
-        return f"{server}/api/v2.1/dtables/{uuid}/{path}"
-    return f"{server}/api/v1/dtables/{uuid}/{path}"
+    return f"{SEATABLE_BASE_URL}/api-gateway/api/v2/dtables/{uuid}/{path}"
 
 
 def invalidate_token():
@@ -72,12 +62,12 @@ def invalidate_token():
 
 
 def list_rows(table_name: str, view_name: str = "Default View") -> list[dict]:
-    """Alle Zeilen einer Tabelle laden"""
+    """Alle Zeilen einer Tabelle laden (mit Spaltennamen statt Keys)"""
     try:
         resp = requests.get(
             _api("rows/"),
             headers=_headers(),
-            params={"table_name": table_name, "view_name": view_name},
+            params={"table_name": table_name, "view_name": view_name, "convert_keys": "true"},
             timeout=30,
         )
         if resp.status_code == 401:
@@ -85,7 +75,7 @@ def list_rows(table_name: str, view_name: str = "Default View") -> list[dict]:
             resp = requests.get(
                 _api("rows/"),
                 headers=_headers(),
-                params={"table_name": table_name, "view_name": view_name},
+                params={"table_name": table_name, "view_name": view_name, "convert_keys": "true"},
                 timeout=30,
             )
         resp.raise_for_status()
@@ -107,7 +97,7 @@ def get_row(table_name: str, row_id: str) -> Optional[dict]:
         resp = requests.get(
             _api(f"rows/{row_id}/"),
             headers=_headers(),
-            params={"table_name": table_name},
+            params={"table_name": table_name, "convert_keys": "true"},
             timeout=10,
         )
         resp.raise_for_status()

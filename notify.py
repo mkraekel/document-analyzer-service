@@ -208,12 +208,12 @@ def send_broker_confirmation(case_id: str, effective_view: dict):
 def send_manual_review(case_id: str, readiness_result: dict, effective_view: dict):
     """Sendet Review-Benachrichtigung bei veralteten Dokumenten"""
     stale = readiness_result.get("stale_docs", [])
-    stale_list = "\n".join(f"- {d['type']}" for d in stale)
+    stale_list = "\n".join(f"- {d.get('type', d.get('doc_type', ''))}" for d in stale)
 
     html_body = f"""<html><body>
 <h3>⚠️ Manuelle Prüfung erforderlich: {case_id}</h3>
 <p>Folgende Dokumente sind veraltet oder abgelaufen:</p>
-<ul>{"".join(f"<li>{d['type']}</li>" for d in stale)}</ul>
+<ul>{"".join(f"<li>{d.get('type', d.get('doc_type', ''))}</li>" for d in stale)}</ul>
 <p>Bitte prüfen Sie ob diese Dokumente akzeptiert werden können.</p>
 <p>Antworten Sie mit:<br>
 <code>ACCEPT_STALE [Dokumenttyp]</code> um ein veraltetes Dokument zu akzeptieren<br>

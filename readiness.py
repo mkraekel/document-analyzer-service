@@ -269,8 +269,13 @@ def check_readiness(case_id: str) -> dict:
 
     # ──────────────────────────────────────────
     # 5. Status bestimmen
+    # Priorität: APPROVE_IMPORT > WAIT_FOR_DOCS > sonstige Blocker
     # ──────────────────────────────────────────
-    if wait_for_docs:
+    if approve_import:
+        # Broker-Override: Direkt zum Import, übersteuert alle anderen Checks
+        status = "READY_FOR_IMPORT"
+
+    elif wait_for_docs:
         status = "WAITING_FOR_DOCUMENTS"
 
     elif stale_docs and not any(overrides.get(f"accept_stale_{d['type'].lower().replace(' ', '_')}") for d in stale_docs):
@@ -284,9 +289,6 @@ def check_readiness(case_id: str) -> dict:
 
     elif missing_broker:
         status = "NEEDS_QUESTIONS_BROKER"
-
-    elif approve_import:
-        status = "READY_FOR_IMPORT"
 
     else:
         status = "AWAITING_BROKER_CONFIRMATION"

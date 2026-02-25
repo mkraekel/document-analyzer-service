@@ -1831,55 +1831,28 @@ import traceback
 @app.get("/debug/seatable")
 async def debug_seatable():
     """Testet SeaTable Verbindung und gibt Details zurück"""
-    import os
+    import requests as _req
     results = {}
     results["env"] = {
         "SEATABLE_API_TOKEN_set": bool(os.getenv("SEATABLE_API_TOKEN")),
         "SEATABLE_BASE_UUID_set": bool(os.getenv("SEATABLE_BASE_UUID")),
         "SEATABLE_BASE_URL": os.getenv("SEATABLE_BASE_URL", "https://cloud.seatable.io"),
     }
-    import requests as _req, os
-    token_resp = _req.get(
-        f"{os.getenv("SEATABLE_BASE_URL", "https://cloud.seatable.io")}/api/v2.1/dtable/app-access-token/",
-        headers={"Authorization": f"Bearer {os.getenv("SEATABLE_API_TOKEN", "")}"},
-        timeout=10,
-    )
-    results["token_response_status"] = token_resp.status_code
-    results["token_response_body"] = token_resp.json() if token_resp.ok else token_resp.text[:300]
+
     try:
+        db.invalidate_token()
         token = db._get_access_token()
         results["auth"] = "ok"
         results["uuid"] = db._get_uuid()
-        results["dtable_server"] = db._get_server()
         results["api_url"] = db._api("rows/")
     except Exception as e:
         results["auth"] = f"FAILED: {e}"
         return results
 
-    # Raw GET test
+    # Tabellen auflisten
     try:
-        import requests as _req
-        token = db._get_access_token()
-        url = db._api("rows/")
-        r = _req.get(url, headers={"Authorization": f"Bearer {token}"}, params={"table_name": "processed_emails", "view_name": "Default View"}, timeout=10)
-        results["list_rows_raw"] = {"status": r.status_code, "url": url, "body": r.text[:400]}
-    except Exception as e:
-        results["list_rows_raw"] = f"FAILED: {e}"
-
-    try:
-        rows = db.list_rows("fin_cases")
-        results["fin_cases"] = f"ok – {len(rows)} rows"
-    except Exception as e:
-        results["fin_cases"] = f"FAILED: {e}"
-
-    # Test: Welche Tabellen existieren?
-    try:
-        import requests as _req
-        token = db._get_access_token()
-        uuid = db._get_uuid()
-        server = db._get_server()
-        # Metadata Endpoint um echte Tabellennamen zu sehen
-        r = _req.get(f"{server}/api/v2.1/dtables/{uuid}/metadata/", headers={"Authorization": f"Bearer {token}"}, timeout=10)
+        meta_url = db._api("metadata/")
+        r = _req.get(meta_url, headers={"Authorization": f"Bearer {token}"}, timeout=10)
         if r.ok:
             tables = [t["name"] for t in r.json().get("metadata", {}).get("tables", [])]
             results["tables_in_base"] = tables
@@ -1888,15 +1861,19 @@ async def debug_seatable():
     except Exception as e:
         results["tables_in_base"] = f"FAILED: {e}"
 
-    # Test: POST (create) direkt testen
+    # fin_cases laden
     try:
-        import requests as _req
-        token = db._get_access_token()
-        url = db._api("rows/")
-        r = _req.post(url, headers={"Authorization": f"Bearer {token}"}, json={"table_name": "processed_emails", "row": {"provider_message_id": "DEBUG-TEST"}}, timeout=10)
-        results["create_row_test"] = {"status": r.status_code, "body": r.text[:300]}
+        rows = db.list_rows("fin_cases")
+        results["fin_cases"] = f"ok – {len(rows)} rows"
     except Exception as e:
-        results["create_row_test"] = f"FAILED: {e}"
+        results["fin_cases"] = f"FAILED: {e}"
+
+    # processed_emails laden
+    try:
+        rows = db.list_rows("processed_emails")
+        results["processed_emails"] = f"ok – {len(rows)} rows"
+    except Exception as e:
+        results["processed_emails"] = f"FAILED: {e}"
 
     return results
 
