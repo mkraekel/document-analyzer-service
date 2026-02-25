@@ -161,9 +161,8 @@ def create_case(
         "case_id": case_id,
         "applicant_name": applicant_name or "",
         "partner_email": partner_email or "",
-        "partner_phone": partner_phone or "",
         "status": "INTAKE",
-        "source": source,
+        "sources": source,
         "facts_extracted": json.dumps(facts or {}),
         "answers_user": json.dumps({}),
         "manual_overrides": json.dumps({}),
@@ -315,9 +314,8 @@ def build_docs_index(case_id: str) -> dict:
             except Exception:
                 extracted = {}
         index[doc_type].append({
-            "filename": doc.get("filename"),
-            "analyzed_at": doc.get("analyzed_at"),
-            "meta": doc.get("meta"),
+            "filename": doc.get("file_name"),
+            "analyzed_at": doc.get("processed_at"),
             "extracted": extracted,
         })
     # Neueste zuerst

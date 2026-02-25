@@ -108,12 +108,12 @@ def get_row(table_name: str, row_id: str) -> Optional[dict]:
 
 
 def create_row(table_name: str, row_data: dict) -> dict:
-    """Neue Zeile erstellen"""
+    """Neue Zeile erstellen (v2 API: rows Array)"""
     try:
         resp = requests.post(
             _api("rows/"),
             headers=_headers(),
-            json={"table_name": table_name, "row": row_data},
+            json={"table_name": table_name, "rows": [row_data]},
             timeout=15,
         )
         resp.raise_for_status()
@@ -169,8 +169,8 @@ def log_processed_email(provider_message_id: str, intent: str, action: str, case
     from datetime import datetime
     create_row("processed_emails", {
         "provider_message_id": provider_message_id,
-        "intent": intent,
-        "action": action,
+        "mail_type": intent,
+        "processing_result": action,
         "case_id": case_id or "",
         "processed_at": datetime.utcnow().isoformat(),
     })

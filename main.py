@@ -2119,12 +2119,11 @@ async def process_document(request: ProcessDocumentRequest):
         db.create_row("fin_documents", {
             "caseId": request.case_id,
             "onedrive_file_id": request.onedrive_file_id or "",
-            "filename": request.filename,
+            "file_name": request.filename,
             "doc_type": "error",
-            "confidence": "none",
             "processing_status": "error",
             "error_message": str(e),
-            "analyzed_at": __import__("datetime").datetime.utcnow().isoformat(),
+            "processed_at": __import__("datetime").datetime.utcnow().isoformat(),
         })
         return ProcessDocumentResponse(success=False, case_id=request.case_id, error=str(e))
 
@@ -2133,13 +2132,11 @@ async def process_document(request: ProcessDocumentRequest):
     db.create_row("fin_documents", {
         "caseId": request.case_id,
         "onedrive_file_id": request.onedrive_file_id or "",
-        "filename": request.filename,
+        "file_name": request.filename,
         "doc_type": result.get("doc_type", "Sonstiges"),
-        "confidence": result.get("confidence", "low"),
         "extracted_data": json.dumps(extracted),
-        "meta": json.dumps(result.get("meta") or {}),
         "processing_status": "completed",
-        "analyzed_at": __import__("datetime").datetime.utcnow().isoformat(),
+        "processed_at": __import__("datetime").datetime.utcnow().isoformat(),
     })
 
     # 4. Facts in Case mergen
