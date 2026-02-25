@@ -180,13 +180,29 @@ def is_email_processed(provider_message_id: str) -> bool:
     return False
 
 
-def log_processed_email(provider_message_id: str, intent: str, action: str, case_id: str = None):
+def log_processed_email(
+    provider_message_id: str,
+    intent: str,
+    action: str,
+    case_id: str = None,
+    from_email: str = None,
+    subject: str = None,
+    conversation_id: str = None,
+    attachments_count: int = 0,
+    attachments_hashes: list = None,
+):
     """E-Mail als verarbeitet markieren"""
     from datetime import datetime
+    import json
     create_row("processed_emails", {
         "provider_message_id": provider_message_id,
         "mail_type": intent,
         "processing_result": action,
         "case_id": case_id or "",
-        "processed_at": datetime.utcnow().isoformat(),
+        "from_email": from_email or "",
+        "subject": subject or "",
+        "conversation_id": conversation_id or "",
+        "processed_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M"),
+        "attachments_count": attachments_count or 0,
+        "attachments_hashes": json.dumps(attachments_hashes or []),
     })

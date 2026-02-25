@@ -1927,12 +1927,20 @@ async def _process_email_impl(request: ProcessEmailRequest):
 
     # 2. Gatekeeper
     gate = cases.gatekeeper(request.from_email, request.subject, request.conversation_id)
+    _att_filenames = list((request.attachments or {}).keys())
+    _log_kwargs = dict(
+        from_email=request.from_email,
+        subject=request.subject,
+        conversation_id=request.conversation_id,
+        attachments_count=len(_att_filenames),
+        attachments_hashes=_att_filenames,
+    )
     if not gate["pass"]:
-        db.log_processed_email(request.provider_message_id, "skipped", gate["reason"])
+        db.log_processed_email(request.provider_message_id, "skipped", gate["reason"], **_log_kwargs)
         return ProcessEmailResponse(action="skipped", reason=gate["reason"])
 
     # Sofort als "in Verarbeitung" markieren (Dedup-Lock)
-    db.log_processed_email(request.provider_message_id, "processing", "lock", None)
+    db.log_processed_email(request.provider_message_id, "processing", "lock", **_log_kwargs)
 
     # 3. KI-Parsing über bestehenden parse-email Logic
     parsed = {}
@@ -1982,7 +1990,7 @@ Antworte NUR mit JSON:
         parsed.get("applicant_lastName")
     )
     if not is_relevant:
-        db.log_processed_email(request.provider_message_id, "not_relevant", "irrelevant")
+        db.log_processed_email(request.provider_message_id, "not_relevant", "irrelevant", **_log_kwargs)
         return ProcessEmailResponse(action="skipped", reason="not_relevant")
 
     # 4. Case Matching
@@ -2047,7 +2055,7 @@ Antworte NUR mit JSON:
             cases.save_answers(case_id, {}, actor=gate["actor"], overrides=overrides)
 
     elif match["action"] == "triage":
-        db.log_processed_email(request.provider_message_id, "triage", "no_case_match")
+        db.log_processed_email(request.provider_message_id, "triage", "no_case_match", **_log_kwargs)
         return ProcessEmailResponse(action="triage", reason="no_case_match")
 
     # 6. Anhänge für Upload vorbereiten
@@ -2066,7 +2074,7 @@ Antworte NUR mit JSON:
             logger.error(f"Readiness check failed: {e}")
 
     # 8. Log
-    db.log_processed_email(request.provider_message_id, parsed.get("mail_type", "new_request"), match["action"], case_id)
+    db.log_processed_email(request.provider_message_id, parsed.get("mail_type", "new_request"), match["action"], case_id, **_log_kwargs)
 
     return ProcessEmailResponse(
         action="processed",
