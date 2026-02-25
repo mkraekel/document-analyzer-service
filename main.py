@@ -1838,6 +1838,14 @@ async def debug_seatable():
         "SEATABLE_BASE_UUID_set": bool(os.getenv("SEATABLE_BASE_UUID")),
         "SEATABLE_BASE_URL": os.getenv("SEATABLE_BASE_URL", "https://cloud.seatable.io"),
     }
+    import requests as _req, os
+    token_resp = _req.get(
+        f"{os.getenv("SEATABLE_BASE_URL", "https://cloud.seatable.io")}/api/v2.1/dtable/app-access-token/",
+        headers={"Authorization": f"Bearer {os.getenv("SEATABLE_API_TOKEN", "")}"},
+        timeout=10,
+    )
+    results["token_response_status"] = token_resp.status_code
+    results["token_response_body"] = token_resp.json() if token_resp.ok else token_resp.text[:300]
     try:
         token = db._get_access_token()
         results["auth"] = "ok"
