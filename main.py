@@ -1970,14 +1970,16 @@ Antworte NUR mit JSON:
   "object_type": "ETW"|"EFH"|"DHH"|"RH"|"MFH"|null,
   "usage": "Eigennutzung"|"Kapitalanlage"|null,
   "extracted_answers": {
-    "APPROVE_IMPORT": null,
-    "WAIT_FOR_DOCS": null,
-    "accept_stale_kontoauszug": null,
-    "accept_stale_gehaltsnachweis": null,
-    "has_joint_account": null
+    "APPROVE_IMPORT": true wenn Broker-Antwort "FREIGABE", "GENEHMIGT", "OK", "Freigabe erteilt" oder ähnlich enthält - sonst null,
+    "WAIT_FOR_DOCS": true wenn Broker sagt er wartet auf weitere Dokumente oder "bitte warten" - sonst null,
+    "accept_stale_kontoauszug": true wenn Broker veraltete Kontoauszüge explizit akzeptiert - sonst null,
+    "accept_stale_gehaltsnachweis": true wenn Broker veraltete Gehaltsnachweise explizit akzeptiert - sonst null,
+    "has_joint_account": true wenn Gemeinschaftskonto erwähnt wird - sonst null
   },
   "notes": string | null
-}"""},
+}
+WICHTIG: Bei is_broker_reply=true besonders auf Freigabe-Keywords achten (FREIGABE, GENEHMIGT, approved, ok, bestätigt).
+Setze APPROVE_IMPORT=true sobald der Broker eine klare Freigabe gibt."""},
                 {"role": "user", "content": f"is_broker_reply: {gate['is_internal_reply']}\n\n{email_text[:4000]}"},
             ],
             response_format={"type": "json_object"},
