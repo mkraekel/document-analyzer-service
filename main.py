@@ -1816,6 +1816,453 @@ async def validate_data(request: ValidationRequest):
     )
 
 
+# ============================================================
+# PIPELINE ENDPOINTS (volle Business-Logik in Python)
+# n8n ruft diese auf – macht selbst nur noch Trigger + OneDrive
+# ============================================================
+
+import seatable as db
+import case_logic as cases
+import readiness as rdns
+import notify
+
+class ProcessEmailRequest(BaseModel):
+    provider_message_id: str
+    conversation_id: Optional[str] = None
+    from_email: str
+    from_name: Optional[str] = ""
+    subject: Optional[str] = ""
+    body_text: Optional[str] = ""
+    body_html: Optional[str] = ""
+    received_at: Optional[str] = None
+    # Anhänge als base64 (key = Dateiname, value = base64-String)
+    attachments: Optional[dict] = {}
+    # OneDrive Folder ID wenn bereits bekannt (z.B. nach Upload durch n8n)
+    onedrive_folder_id: Optional[str] = None
+
+class ProcessEmailResponse(BaseModel):
+    action: str          # 'processed' | 'skipped' | 'triage' | 'error'
+    case_id: Optional[str] = None
+    is_new_case: bool = False
+    status: Optional[str] = None
+    reason: Optional[str] = None
+    # Instruktionen für n8n
+    onedrive_folder_id: Optional[str] = None
+    needs_onedrive_folder: bool = False
+    files_to_upload: list = []
+    readiness: Optional[dict] = None
+
+@app.post("/process-email", response_model=ProcessEmailResponse)
+async def process_email(request: ProcessEmailRequest):
+    """
+    Vollständige E-Mail-Verarbeitungs-Pipeline.
+    n8n sendet rohe E-Mail-Daten + Anhänge (base64), Python macht den Rest.
+
+    Rückgabe enthält Instruktionen für n8n (Dateien hochladen, etc.)
+    """
+    logger.info(f"process-email: {request.from_email} / {request.subject[:60] if request.subject else ''}")
+
+    # 1. Dedup-Check
+    if db.is_email_processed(request.provider_message_id):
+        logger.info(f"E-Mail bereits verarbeitet: {request.provider_message_id}")
+        return ProcessEmailResponse(action="skipped", reason="already_processed")
+
+    # 2. Gatekeeper
+    gate = cases.gatekeeper(request.from_email, request.subject, request.conversation_id)
+    if not gate["pass"]:
+        db.log_processed_email(request.provider_message_id, "skipped", gate["reason"])
+        return ProcessEmailResponse(action="skipped", reason=gate["reason"])
+
+    # Sofort als "in Verarbeitung" markieren (Dedup-Lock)
+    db.log_processed_email(request.provider_message_id, "processing", "lock", None)
+
+    # 3. KI-Parsing über bestehenden parse-email Logic
+    parsed = {}
+    try:
+        email_text = f"Subject: {request.subject}\nFrom: {request.from_email}\n\n{request.body_text}"
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": """Du bist ein E-Mail-Parser für Baufinanzierungsfälle.
+Analysiere die E-Mail und extrahiere strukturierte Daten.
+Antworte NUR mit JSON:
+{
+  "mail_type": "new_request" | "reply",
+  "is_relevant": true | false,
+  "applicant_firstName": string | null,
+  "applicant_lastName": string | null,
+  "partner_email": string | null,
+  "referenced_case_id": string | null,
+  "purchase_price": number | null,
+  "loan_amount": number | null,
+  "equity_to_use": number | null,
+  "object_type": "ETW"|"EFH"|"DHH"|"RH"|"MFH"|null,
+  "usage": "Eigennutzung"|"Kapitalanlage"|null,
+  "extracted_answers": {
+    "APPROVE_IMPORT": null,
+    "WAIT_FOR_DOCS": null,
+    "accept_stale_kontoauszug": null,
+    "accept_stale_gehaltsnachweis": null,
+    "has_joint_account": null
+  },
+  "notes": string | null
+}"""},
+                {"role": "user", "content": f"is_broker_reply: {gate['is_internal_reply']}\n\n{email_text[:4000]}"},
+            ],
+            response_format={"type": "json_object"},
+        )
+        parsed = json.loads(resp.choices[0].message.content)
+    except Exception as e:
+        logger.error(f"AI parse failed: {e}")
+        parsed = {"mail_type": "new_request", "is_relevant": True}
+
+    # Relevanz prüfen
+    is_broker = gate["is_internal_reply"]
+    is_relevant = is_broker or (
+        parsed.get("is_relevant") and
+        parsed.get("applicant_firstName") and
+        parsed.get("applicant_lastName")
+    )
+    if not is_relevant:
+        db.log_processed_email(request.provider_message_id, "not_relevant", "irrelevant")
+        return ProcessEmailResponse(action="skipped", reason="not_relevant")
+
+    # 4. Case Matching
+    first_name = parsed.get("applicant_firstName") or ""
+    last_name = parsed.get("applicant_lastName") or ""
+    applicant_name = f"{first_name} {last_name}".strip()
+
+    match = cases.match_case(
+        from_email=request.from_email,
+        applicant_last_name=last_name,
+        referenced_case_id=parsed.get("referenced_case_id"),
+        conversation_id=request.conversation_id,
+        mail_type=parsed.get("mail_type", "new_request"),
+        actor=gate["actor"],
+    )
+
+    case_id = match["case_id"]
+    is_new = match["action"] == "create"
+    needs_folder = False
+
+    # 5. Case erstellen oder aktualisieren
+    if match["action"] == "create":
+        facts = {
+            "property_data": {
+                "purchase_price": parsed.get("purchase_price"),
+                "object_type": parsed.get("object_type"),
+                "usage": parsed.get("usage"),
+            },
+            "financing_data": {
+                "loan_amount": parsed.get("loan_amount"),
+                "equity_to_use": parsed.get("equity_to_use"),
+            },
+        }
+        cases.create_case(
+            case_id=case_id,
+            applicant_name=applicant_name,
+            partner_email=parsed.get("partner_email") or request.from_email,
+            partner_phone="",
+            conversation_id=request.conversation_id,
+            facts=facts,
+        )
+        needs_folder = True  # n8n soll OneDrive-Ordner erstellen
+
+    elif match["action"] == "update":
+        cases.update_case_conversation(case_id, request.conversation_id)
+
+        # Antworten verarbeiten
+        extracted = parsed.get("extracted_answers") or {}
+        answers = {k: v for k, v in {
+            "purchase_price": parsed.get("purchase_price"),
+            "loan_amount": parsed.get("loan_amount"),
+            "equity_to_use": parsed.get("equity_to_use"),
+            "object_type": parsed.get("object_type"),
+            "usage": parsed.get("usage"),
+        }.items() if v is not None}
+
+        overrides = {k: v for k, v in extracted.items() if v is not None}
+
+        if answers:
+            cases.save_answers(case_id, answers, actor=gate["actor"])
+        if overrides:
+            cases.save_answers(case_id, {}, actor=gate["actor"], overrides=overrides)
+
+    elif match["action"] == "triage":
+        db.log_processed_email(request.provider_message_id, "triage", "no_case_match")
+        return ProcessEmailResponse(action="triage", reason="no_case_match")
+
+    # 6. Anhänge für Upload vorbereiten
+    files_to_upload = []
+    if request.attachments:
+        for filename, b64_data in request.attachments.items():
+            files_to_upload.append({"filename": filename, "data_base64": b64_data})
+
+    # 7. Readiness Check (nur bei Update oder nach kurzer Verarbeitung)
+    readiness_result = None
+    if match["action"] == "update" and not needs_folder:
+        try:
+            readiness_result = rdns.check_readiness(case_id)
+            notify.dispatch_notifications(case_id, readiness_result)
+        except Exception as e:
+            logger.error(f"Readiness check failed: {e}")
+
+    # 8. Log
+    db.log_processed_email(request.provider_message_id, parsed.get("mail_type", "new_request"), match["action"], case_id)
+
+    return ProcessEmailResponse(
+        action="processed",
+        case_id=case_id,
+        is_new_case=is_new,
+        status=readiness_result.get("status") if readiness_result else "INTAKE",
+        onedrive_folder_id=request.onedrive_folder_id,
+        needs_onedrive_folder=needs_folder,
+        files_to_upload=files_to_upload,
+        readiness=readiness_result,
+    )
+
+
+class ProcessDocumentRequest(BaseModel):
+    case_id: str
+    filename: str
+    data_base64: str        # Base64 kodierte Datei
+    mime_type: Optional[str] = "application/pdf"
+    onedrive_file_id: Optional[str] = None
+
+class ProcessDocumentResponse(BaseModel):
+    success: bool
+    case_id: str
+    doc_type: Optional[str] = None
+    confidence: Optional[str] = None
+    facts_merged: bool = False
+    readiness: Optional[dict] = None
+    error: Optional[str] = None
+
+@app.post("/process-document", response_model=ProcessDocumentResponse)
+async def process_document(request: ProcessDocumentRequest):
+    """
+    Analysiert ein Dokument und mergt die Facts in den Case.
+    n8n lädt Datei von OneDrive herunter und sendet sie base64-kodiert.
+    """
+    logger.info(f"process-document: {request.case_id} / {request.filename}")
+
+    # 1. Datei dekodieren
+    try:
+        file_bytes = base64.b64decode(request.data_base64)
+    except Exception as e:
+        return ProcessDocumentResponse(success=False, case_id=request.case_id, error=f"Base64 decode failed: {e}")
+
+    # 2. Dokument analysieren (bestehende Logik)
+    try:
+        result = analyze_with_gpt4o(file_bytes, request.mime_type, request.filename)
+    except Exception as e:
+        logger.error(f"Document analysis failed: {e}")
+        # In SeaTable als Fehler speichern
+        db.create_row("fin_documents", {
+            "caseId": request.case_id,
+            "onedrive_file_id": request.onedrive_file_id or "",
+            "filename": request.filename,
+            "doc_type": "error",
+            "confidence": "none",
+            "processing_status": "error",
+            "error_message": str(e),
+            "analyzed_at": __import__("datetime").datetime.utcnow().isoformat(),
+        })
+        return ProcessDocumentResponse(success=False, case_id=request.case_id, error=str(e))
+
+    # 3. In fin_documents speichern
+    extracted = result.get("extracted_data") or {}
+    db.create_row("fin_documents", {
+        "caseId": request.case_id,
+        "onedrive_file_id": request.onedrive_file_id or "",
+        "filename": request.filename,
+        "doc_type": result.get("doc_type", "Sonstiges"),
+        "confidence": result.get("confidence", "low"),
+        "extracted_data": json.dumps(extracted),
+        "meta": json.dumps(result.get("meta") or {}),
+        "processing_status": "completed",
+        "analyzed_at": __import__("datetime").datetime.utcnow().isoformat(),
+    })
+
+    # 4. Facts in Case mergen
+    try:
+        doc_type = result.get("doc_type", "")
+        new_facts = _map_extracted_to_facts(doc_type, extracted)
+        if new_facts:
+            cases.save_facts(request.case_id, new_facts, source=f"document:{doc_type}")
+        facts_merged = bool(new_facts)
+    except Exception as e:
+        logger.error(f"Facts merge failed: {e}")
+        facts_merged = False
+
+    # 5. Readiness Check
+    readiness_result = None
+    try:
+        readiness_result = rdns.check_readiness(request.case_id)
+        notify.dispatch_notifications(request.case_id, readiness_result)
+    except Exception as e:
+        logger.error(f"Readiness check after document failed: {e}")
+
+    return ProcessDocumentResponse(
+        success=True,
+        case_id=request.case_id,
+        doc_type=result.get("doc_type"),
+        confidence=result.get("confidence"),
+        facts_merged=facts_merged,
+        readiness=readiness_result,
+    )
+
+
+def _map_extracted_to_facts(doc_type: str, extracted: dict) -> dict:
+    """Mappt extrahierte Dokument-Daten auf facts_extracted Struktur"""
+    facts = {}
+
+    if doc_type in ("Ausweiskopie",):
+        facts["applicant_data"] = {
+            "vorname": extracted.get("Vorname"),
+            "nachname": extracted.get("Nachname"),
+            "geburtsdatum": extracted.get("Geburtsdatum"),
+            "geburtsort": extracted.get("Geburtsort"),
+            "nationalitaet": extracted.get("Nationalität") or extracted.get("Nationalitaet"),
+        }
+        facts["id_data"] = {
+            "ausweisnummer": extracted.get("Ausweisnummer"),
+            "gueltig_bis": extracted.get("Gültig bis"),
+        }
+
+    elif doc_type in ("Gehaltsnachweis", "Gehaltsabrechnung", "Gehaltsabrechnung Dezember", "Lohnsteuerbescheinigung"):
+        facts["income_data"] = {
+            "arbeitgeber": extracted.get("Arbeitgeber"),
+            "brutto": extracted.get("Brutto"),
+            "netto": extracted.get("Netto"),
+            "steuerklasse": extracted.get("Steuerklasse"),
+        }
+        facts["employment_data"] = {
+            "arbeitgeber": extracted.get("Arbeitgeber"),
+            "employment_type": "Angestellter",
+        }
+
+    elif doc_type in ("Kontoauszug",):
+        facts["banking_data"] = {
+            "bank": extracted.get("Bank"),
+            "iban": extracted.get("IBAN"),
+            "kontostand": extracted.get("Kontostand"),
+        }
+
+    elif doc_type in ("Exposé",):
+        facts["property_data"] = {
+            "purchase_price": extracted.get("Kaufpreis") or extracted.get("purchase_price"),
+            "address": extracted.get("Adresse"),
+            "object_type": extracted.get("Objekttyp") or extracted.get("object_type"),
+            "living_area": extracted.get("Wohnfläche"),
+            "year_built": extracted.get("Baujahr"),
+        }
+
+    elif doc_type in ("Selbstauskunft",):
+        facts["applicant_data"] = {
+            "vorname": extracted.get("Vorname") or extracted.get("applicant_first_name"),
+            "nachname": extracted.get("Nachname") or extracted.get("applicant_last_name"),
+            "email": extracted.get("E-Mail") or extracted.get("applicant_email"),
+            "telefon": extracted.get("Telefon") or extracted.get("applicant_phone"),
+            "geburtsdatum": extracted.get("Geburtsdatum"),
+            "familienstand": extracted.get("Familienstand"),
+        }
+
+    # Leere Werte entfernen
+    def clean(d):
+        if isinstance(d, dict):
+            return {k: clean(v) for k, v in d.items() if v is not None and v != ""}
+        return d
+
+    return clean(facts)
+
+
+class IngestAnswersRequest(BaseModel):
+    case_id: str
+    actor: str = "partner"      # "partner" | "broker"
+    source: str = "webhook"
+    answers: dict = {}
+    overrides: Optional[dict] = None  # APPROVE_IMPORT, WAIT_FOR_DOCS, etc.
+
+class IngestAnswersResponse(BaseModel):
+    success: bool
+    case_id: str
+    status: Optional[str] = None
+    readiness: Optional[dict] = None
+    ready_for_import: bool = False
+    error: Optional[str] = None
+
+@app.post("/ingest-answers", response_model=IngestAnswersResponse)
+async def ingest_answers(request: IngestAnswersRequest):
+    """
+    Verarbeitet Antworten/Korrekturen von Partner oder Broker.
+    Speichert in answers_user / manual_overrides und führt Readiness Check durch.
+    """
+    logger.info(f"ingest-answers: {request.case_id} / actor={request.actor}")
+
+    try:
+        # Antworten speichern
+        cases.save_answers(
+            case_id=request.case_id,
+            answers=request.answers,
+            actor=request.actor,
+            overrides=request.overrides,
+        )
+
+        # Readiness Check
+        readiness_result = rdns.check_readiness(request.case_id)
+        notify.dispatch_notifications(request.case_id, readiness_result)
+
+        return IngestAnswersResponse(
+            success=True,
+            case_id=request.case_id,
+            status=readiness_result["status"],
+            readiness=readiness_result,
+            ready_for_import=readiness_result["status"] == "READY_FOR_IMPORT",
+        )
+    except Exception as e:
+        logger.error(f"ingest-answers failed: {e}")
+        return IngestAnswersResponse(success=False, case_id=request.case_id, error=str(e))
+
+
+class FullReadinessRequest(BaseModel):
+    case_id: str
+    send_notifications: bool = True
+
+@app.post("/full-readiness-check")
+async def full_readiness_check(request: FullReadinessRequest):
+    """
+    Vollständiger Readiness Check mit SeaTable-Zugriff und E-Mail-Versand.
+    Ersetzt den n8n Readiness Router komplett.
+    """
+    logger.info(f"full-readiness-check: {request.case_id}")
+    try:
+        result = rdns.check_readiness(request.case_id)
+        if request.send_notifications:
+            notify.dispatch_notifications(request.case_id, result)
+        return result
+    except Exception as e:
+        logger.error(f"full-readiness-check failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class UpdateOneDriveFolderRequest(BaseModel):
+    case_id: str
+    onedrive_folder_id: str
+
+@app.post("/update-onedrive-folder")
+async def update_onedrive_folder(request: UpdateOneDriveFolderRequest):
+    """n8n meldet erstellten OneDrive-Ordner zurück"""
+    try:
+        cases.update_onedrive_folder(request.case_id, request.onedrive_folder_id)
+        # Jetzt Readiness Check starten
+        result = rdns.check_readiness(request.case_id)
+        notify.dispatch_notifications(request.case_id, result)
+        return {"success": True, "case_id": request.case_id, "status": result["status"]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
