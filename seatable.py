@@ -22,11 +22,16 @@ def _get_access_token() -> str:
     if _access_token_cache["token"]:
         return _access_token_cache["token"]
 
-    resp = requests.post(
+    if not SEATABLE_API_TOKEN:
+        raise RuntimeError("SEATABLE_API_TOKEN ist nicht gesetzt!")
+
+    resp = requests.get(
         f"{SEATABLE_BASE_URL}/api/v2.1/dtable/app-access-token/",
         headers={"Authorization": f"Bearer {SEATABLE_API_TOKEN}"},
         timeout=10,
     )
+    if not resp.ok:
+        raise RuntimeError(f"SeaTable Auth failed: {resp.status_code} – {resp.text[:200]}")
     resp.raise_for_status()
     data = resp.json()
     token = data["access_token"]
