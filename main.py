@@ -2166,11 +2166,11 @@ async def process_document(request: ProcessDocumentRequest):
         logger.error(f"Facts merge failed: {e}")
         facts_merged = False
 
-    # 5. Readiness Check
+    # 5. Readiness Check (Status in SeaTable updaten, KEIN Notify)
+    # Notification läuft einmalig in n8n nach allen Docs via /full-readiness-check
     readiness_result = None
     try:
         readiness_result = rdns.check_readiness(request.case_id)
-        notify.dispatch_notifications(request.case_id, readiness_result)
     except Exception as e:
         logger.error(f"Readiness check after document failed: {e}")
 
