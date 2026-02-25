@@ -2,11 +2,16 @@
 Notification Sender
 Versendet E-Mails per SMTP basierend auf Case-Status.
 Portiert aus Readiness Router (n8n SMTP Nodes + GPT-4o Question Generator).
+
+DRY-RUN MODUS:
+  EMAIL_DRY_RUN=true  → Kein echter Versand, alle E-Mails landen in der
+                         SeaTable-Tabelle "email_test_log" (sichtbar im Browser).
 """
 
 import os
 import logging
 import smtplib
+from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Optional
@@ -22,6 +27,9 @@ SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER)
 
 BROKER_EMAIL = os.getenv("BROKER_EMAIL", "backoffice@alexander-heil.com")
 
+# Dry-Run: EMAIL_DRY_RUN=true → kein echter Versand, Eintrag in SeaTable
+EMAIL_DRY_RUN = os.getenv("EMAIL_DRY_RUN", "false").lower() in ("true", "1", "yes")
+
 _openai = None
 
 
@@ -32,8 +40,48 @@ def _get_openai() -> OpenAI:
     return _openai
 
 
+def _log_to_seatable(to: str, subject: str, html_body: str, text_body: str = None):
+    """Schreibt E-Mail in SeaTable-Tabelle 'email_test_log' statt zu senden."""
+    try:
+        import seatable as db
+        db.create_row("email_test_log", {
+            "to": to,
+            "subject": subject,
+            "body_text": (text_body or "")[:2000],
+            "body_html": html_body[:5000],
+            "logged_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            "dry_run": True,
+        })
+        logger.info(f"[DRY-RUN] E-Mail nach SeaTable email_test_log: To={to} | {subject}")
+    except Exception as e:
+        # Fallback auf Log-Datei wenn SeaTable nicht erreichbar
+        logger.warning(f"[DRY-RUN] SeaTable-Log fehlgeschlagen ({e}), schreibe in dry_run_emails.log")
+        _log_to_file(to, subject, html_body, text_body)
+
+
+def _log_to_file(to: str, subject: str, html_body: str, text_body: str = None):
+    """Fallback: schreibt E-Mail in lokale Datei dry_run_emails.log."""
+    try:
+        log_path = os.path.join(os.path.dirname(__file__), "dry_run_emails.log")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"\n{'='*60}\n")
+            f.write(f"[{datetime.utcnow().isoformat()}] DRY-RUN E-MAIL\n")
+            f.write(f"To:      {to}\n")
+            f.write(f"Subject: {subject}\n")
+            f.write(f"Body:\n{text_body or html_body}\n")
+    except Exception as e:
+        logger.error(f"[DRY-RUN] Log-Datei konnte nicht geschrieben werden: {e}")
+
+
 def _send_email(to: str, subject: str, html_body: str, text_body: str = None):
-    """SMTP E-Mail versenden"""
+    """E-Mail versenden – oder im Dry-Run-Modus nach SeaTable loggen."""
+
+    # Dry-Run: kein echter Versand
+    if EMAIL_DRY_RUN:
+        _log_to_seatable(to, subject, html_body, text_body)
+        return
+
+    # SMTP nicht konfiguriert
     if not SMTP_HOST or not SMTP_USER:
         logger.warning(f"SMTP nicht konfiguriert – E-Mail an {to} nicht gesendet")
         logger.info(f"E-Mail Inhalt:\nTo: {to}\nSubject: {subject}\n{text_body or html_body}")

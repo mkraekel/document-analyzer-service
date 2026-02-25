@@ -6,6 +6,7 @@ Direkte REST API Anbindung für fin_cases, fin_documents, processed_emails, fin_
 
 import os
 import logging
+import time
 import requests
 from typing import Optional
 
@@ -15,12 +16,13 @@ SEATABLE_BASE_URL = os.getenv("SEATABLE_BASE_URL", "https://cloud.seatable.io")
 SEATABLE_API_TOKEN = os.getenv("SEATABLE_API_TOKEN", "")
 SEATABLE_BASE_UUID = os.getenv("SEATABLE_BASE_UUID", "")
 
-_access_token_cache = {"token": None, "dtable_uuid": None}
+_TOKEN_TTL = 50 * 60  # 50 Minuten (Token läuft nach ~1h ab)
+_access_token_cache = {"token": None, "dtable_uuid": None, "expires_at": 0}
 
 
 def _get_access_token() -> str:
-    """Holt JWT Access Token von SeaTable (gecacht)"""
-    if _access_token_cache["token"]:
+    """Holt JWT Access Token von SeaTable (gecacht, TTL 50min)"""
+    if _access_token_cache["token"] and time.time() < _access_token_cache["expires_at"]:
         return _access_token_cache["token"]
 
     if not SEATABLE_API_TOKEN:
@@ -38,6 +40,7 @@ def _get_access_token() -> str:
     uuid = data.get("dtable_uuid", SEATABLE_BASE_UUID)
     _access_token_cache["token"] = token
     _access_token_cache["dtable_uuid"] = uuid
+    _access_token_cache["expires_at"] = time.time() + _TOKEN_TTL
     logger.info(f"SeaTable auth ok: uuid={uuid}")
     return token
 
@@ -59,6 +62,7 @@ def _api(path: str) -> str:
 
 def invalidate_token():
     _access_token_cache["token"] = None
+    _access_token_cache["expires_at"] = 0
 
 
 def list_rows(table_name: str, view_name: str = "Default View") -> list[dict]:

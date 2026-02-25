@@ -519,7 +519,8 @@ async def check_readiness(request: ReadinessRequest):
     is_self_employed_1 = "selbst" in emp_type_1 or "freiberuf" in emp_type_1
     is_self_employed_2 = "selbst" in emp_type_2 or "freiberuf" in emp_type_2
     has_self_employed = is_self_employed_1 or is_self_employed_2
-    has_employed = (emp_type_1 and not is_self_employed_1) or (is_couple and emp_type_2 and not is_self_employed_2)
+    # Default: Angestellter wenn employment_type nicht bekannt (sicherer als keine Dokument-Prüfung)
+    has_employed = (not emp_type_1 or (emp_type_1 and not is_self_employed_1)) or (is_couple and (not emp_type_2 or (emp_type_2 and not is_self_employed_2)))
 
     # 3. Build required docs list
     required_docs = (
@@ -2334,21 +2335,69 @@ class UpdateOneDriveFolderRequest(BaseModel):
 
 @app.post("/update-onedrive-folder")
 async def update_onedrive_folder(request: UpdateOneDriveFolderRequest):
-    """n8n meldet erstellten OneDrive-Ordner zurück"""
+    """n8n meldet erstellten OneDrive-Ordner zurück.
+    Kein Notification-Dispatch hier – n8n ruft danach /full-readiness-check auf."""
     try:
         cases.update_onedrive_folder(request.case_id, request.onedrive_folder_id)
-        # Readiness Check starten
+        # Nur Status prüfen, KEINE Notification (verhindert Doppel-Notification)
         result = rdns.check_readiness(request.case_id)
-        # Notifications sind nicht-kritisch – Fehler hier dürfen nie einen 500 erzeugen
-        try:
-            notify.dispatch_notifications(request.case_id, result)
-        except Exception as notify_err:
-            logger.error(f"dispatch_notifications failed (non-fatal): {notify_err}")
         return {"success": True, "case_id": request.case_id, "status": result["status"]}
     except Exception as e:
         tb = traceback.format_exc()
         logger.error(f"update-onedrive-folder failed: {tb}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# DRY-RUN LOG ENDPOINT
+# ============================================
+
+@app.get("/dry-run-log")
+async def dry_run_log(limit: int = 20):
+    """
+    Zeigt die letzten Test-E-Mails aus dem Dry-Run-Modus.
+    Liest aus SeaTable 'email_test_log' oder aus der lokalen dry_run_emails.log.
+    """
+    import notify as ntf
+    results = {"dry_run_active": ntf.EMAIL_DRY_RUN, "emails": [], "source": None}
+
+    # Aus SeaTable laden
+    try:
+        rows = db.list_rows("email_test_log")
+        rows_sorted = sorted(rows, key=lambda r: r.get("logged_at", ""), reverse=True)[:limit]
+        results["emails"] = [
+            {
+                "to": r.get("to"),
+                "subject": r.get("subject"),
+                "body_text": r.get("body_text", "")[:500],
+                "logged_at": r.get("logged_at"),
+            }
+            for r in rows_sorted
+        ]
+        results["source"] = "seatable"
+        return results
+    except Exception:
+        pass
+
+    # Fallback: lokale Logdatei
+    log_path = os.path.join(os.path.dirname(__file__), "dry_run_emails.log")
+    if os.path.exists(log_path):
+        with open(log_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        entries = [e.strip() for e in content.split("=" * 60) if e.strip()]
+        results["emails"] = entries[-limit:]
+        results["source"] = "logfile"
+
+    return results
+
+
+@app.delete("/dry-run-log")
+async def clear_dry_run_log():
+    """Löscht die lokale dry_run_emails.log (SeaTable-Einträge manuell löschen)."""
+    log_path = os.path.join(os.path.dirname(__file__), "dry_run_emails.log")
+    if os.path.exists(log_path):
+        os.remove(log_path)
+    return {"cleared": True, "note": "SeaTable email_test_log bitte manuell in SeaTable leeren"}
 
 
 if __name__ == "__main__":
