@@ -1825,6 +1825,40 @@ import seatable as db
 import case_logic as cases
 import readiness as rdns
 import notify
+import traceback
+
+
+@app.get("/debug/seatable")
+async def debug_seatable():
+    """Testet SeaTable Verbindung und gibt Details zurück"""
+    import os
+    results = {}
+    results["env"] = {
+        "SEATABLE_API_TOKEN_set": bool(os.getenv("SEATABLE_API_TOKEN")),
+        "SEATABLE_BASE_UUID_set": bool(os.getenv("SEATABLE_BASE_UUID")),
+        "SEATABLE_BASE_URL": os.getenv("SEATABLE_BASE_URL", "https://cloud.seatable.io"),
+    }
+    try:
+        token = db._get_access_token()
+        results["auth"] = "ok"
+        results["uuid"] = db._get_uuid()
+    except Exception as e:
+        results["auth"] = f"FAILED: {e}"
+        return results
+
+    try:
+        rows = db.list_rows("processed_emails")
+        results["processed_emails"] = f"ok – {len(rows)} rows"
+    except Exception as e:
+        results["processed_emails"] = f"FAILED: {e}"
+
+    try:
+        rows = db.list_rows("fin_cases")
+        results["fin_cases"] = f"ok – {len(rows)} rows"
+    except Exception as e:
+        results["fin_cases"] = f"FAILED: {e}"
+
+    return results
 
 class ProcessEmailRequest(BaseModel):
     provider_message_id: str
@@ -1852,15 +1886,22 @@ class ProcessEmailResponse(BaseModel):
     files_to_upload: list = []
     readiness: Optional[dict] = None
 
-@app.post("/process-email", response_model=ProcessEmailResponse)
+@app.post("/process-email")
 async def process_email(request: ProcessEmailRequest):
     """
     Vollständige E-Mail-Verarbeitungs-Pipeline.
     n8n sendet rohe E-Mail-Daten + Anhänge (base64), Python macht den Rest.
-
-    Rückgabe enthält Instruktionen für n8n (Dateien hochladen, etc.)
     """
     logger.info(f"process-email: {request.from_email} / {request.subject[:60] if request.subject else ''}")
+    try:
+        return await _process_email_impl(request)
+    except Exception as e:
+        tb = traceback.format_exc()
+        logger.error(f"process-email unhandled error: {tb}")
+        raise HTTPException(status_code=500, detail={"error": str(e), "traceback": tb})
+
+
+async def _process_email_impl(request: ProcessEmailRequest):
 
     # 1. Dedup-Check
     if db.is_email_processed(request.provider_message_id):
