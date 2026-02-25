@@ -14,7 +14,7 @@ SEATABLE_BASE_URL = os.getenv("SEATABLE_BASE_URL", "https://cloud.seatable.io")
 SEATABLE_API_TOKEN = os.getenv("SEATABLE_API_TOKEN", "")
 SEATABLE_BASE_UUID = os.getenv("SEATABLE_BASE_UUID", "")
 
-_access_token_cache = {"token": None, "dtable_uuid": None}
+_access_token_cache = {"token": None, "dtable_uuid": None, "dtable_server": None}
 
 
 def _get_access_token() -> str:
@@ -32,13 +32,15 @@ def _get_access_token() -> str:
     )
     if not resp.ok:
         raise RuntimeError(f"SeaTable Auth failed: {resp.status_code} – {resp.text[:200]}")
-    resp.raise_for_status()
     data = resp.json()
     token = data["access_token"]
     uuid = data.get("dtable_uuid", SEATABLE_BASE_UUID)
+    # dtable_server ist die korrekte URL für Row-Operationen (kann abweichen!)
+    dtable_server = data.get("dtable_server", "").rstrip("/") or f"{SEATABLE_BASE_URL}/dtable-server"
     _access_token_cache["token"] = token
     _access_token_cache["dtable_uuid"] = uuid
-    logger.debug(f"SeaTable access token refreshed, uuid={uuid}")
+    _access_token_cache["dtable_server"] = dtable_server
+    logger.info(f"SeaTable auth ok: uuid={uuid}, server={dtable_server}")
     return token
 
 
@@ -47,13 +49,19 @@ def _get_uuid() -> str:
     return _access_token_cache["dtable_uuid"] or SEATABLE_BASE_UUID
 
 
+def _get_server() -> str:
+    _get_access_token()
+    return _access_token_cache["dtable_server"] or f"{SEATABLE_BASE_URL}/dtable-server"
+
+
 def _headers() -> dict:
     return {"Authorization": f"Bearer {_get_access_token()}", "Content-Type": "application/json"}
 
 
 def _api(path: str) -> str:
     uuid = _get_uuid()
-    return f"{SEATABLE_BASE_URL}/dtable-server/api/v1/dtables/{uuid}/{path}"
+    server = _get_server()
+    return f"{server}/api/v1/dtables/{uuid}/{path}"
 
 
 def invalidate_token():

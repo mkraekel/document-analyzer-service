@@ -1842,6 +1842,8 @@ async def debug_seatable():
         token = db._get_access_token()
         results["auth"] = "ok"
         results["uuid"] = db._get_uuid()
+        results["dtable_server"] = db._get_server()
+        results["api_url"] = db._api("rows/")
     except Exception as e:
         results["auth"] = f"FAILED: {e}"
         return results
