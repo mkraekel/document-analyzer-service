@@ -1860,6 +1860,16 @@ async def debug_seatable():
     except Exception as e:
         results["fin_cases"] = f"FAILED: {e}"
 
+    # Test: POST (create) direkt testen
+    try:
+        import requests as _req
+        token = db._get_access_token()
+        url = db._api("rows/")
+        r = _req.post(url, headers={"Authorization": f"Bearer {token}"}, json={"table_name": "processed_emails", "row": {"provider_message_id": "DEBUG-TEST"}}, timeout=10)
+        results["create_row_test"] = {"status": r.status_code, "body": r.text[:300]}
+    except Exception as e:
+        results["create_row_test"] = f"FAILED: {e}"
+
     return results
 
 class ProcessEmailRequest(BaseModel):
