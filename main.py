@@ -2153,22 +2153,52 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
         db.log_processed_email(request.provider_message_id, "triage", "no_case_match", **_log_kwargs)
         return ProcessEmailResponse(action="triage", reason="no_case_match")
 
-    # 6. Anhänge für Upload vorbereiten
-    files_to_upload = []
+    # 6. Anhänge direkt intern verarbeiten (statt zurück an n8n)
+    docs_processed = []
     if request.attachments:
         for filename, b64_data in request.attachments.items():
-            files_to_upload.append({"filename": filename, "data_base64": b64_data})
+            try:
+                file_bytes = base64.b64decode(b64_data)
+                ext = filename.split('.')[-1].lower()
+                mime_map = {
+                    'pdf': 'application/pdf', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
+                    'png': 'image/png', 'tiff': 'image/tiff', 'tif': 'image/tiff',
+                    'webp': 'image/webp',
+                }
+                mime = mime_map.get(ext, 'application/octet-stream')
 
-    # 7. Readiness Check (nur bei Update OHNE neue Anhänge)
-    # Mit Anhängen: Readiness läuft nach jedem /process-document (hat aktuellere Daten)
+                result = analyze_with_gpt4o(file_bytes, mime, filename)
+                extracted = result.get("extracted_data") or {}
+
+                # In fin_documents speichern
+                db.create_row("fin_documents", {
+                    "caseId": case_id,
+                    "file_name": filename,
+                    "doc_type": result.get("doc_type", "Sonstiges"),
+                    "extracted_data": json.dumps(extracted),
+                    "processing_status": "completed",
+                    "processed_at": __import__("datetime").datetime.utcnow().isoformat(),
+                })
+
+                # Facts in Case mergen
+                new_facts = _map_extracted_to_facts(result.get("doc_type", ""), extracted)
+                if new_facts:
+                    cases.save_facts(case_id, new_facts, source=f"document:{result.get('doc_type', '')}")
+
+                docs_processed.append({"filename": filename, "doc_type": result.get("doc_type"), "success": True})
+                logger.info(f"Attachment processed: {filename} → {result.get('doc_type')}")
+
+            except Exception as e:
+                logger.error(f"Attachment processing failed for {filename}: {e}")
+                docs_processed.append({"filename": filename, "success": False, "error": str(e)})
+
+    # 7. Readiness Check + Notifications (immer, nachdem alles verarbeitet ist)
     readiness_result = None
-    has_attachments = len(files_to_upload) > 0
-    if match["action"] == "update" and not needs_folder and not has_attachments:
-        try:
-            readiness_result = rdns.check_readiness(case_id)
-            notify.dispatch_notifications(case_id, readiness_result)
-        except Exception as e:
-            logger.error(f"Readiness check failed: {e}")
+    try:
+        readiness_result = rdns.check_readiness(case_id)
+        notify.dispatch_notifications(case_id, readiness_result)
+    except Exception as e:
+        logger.error(f"Readiness check failed: {e}")
 
     # 8. Log
     db.log_processed_email(request.provider_message_id, parsed.get("mail_type", "new_request"), match["action"], case_id, **_log_kwargs)
@@ -2180,7 +2210,7 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
         status=readiness_result.get("status") if readiness_result else "INTAKE",
         onedrive_folder_id=request.onedrive_folder_id,
         needs_onedrive_folder=needs_folder,
-        files_to_upload=files_to_upload,
+        files_to_upload=[],  # Leer – Anhänge wurden intern verarbeitet
         google_drive_links=parsed.get("google_drive_links", []),
         readiness=readiness_result,
     )
