@@ -197,7 +197,7 @@ async function loadTriage() {
     const emailGuess = parsed.partner_email || e.from_email || '';
 
     return `
-    <div class="card">
+    <div class="card" id="triage-card-${e.provider_message_id}">
       <div class="flex justify-between items-start mb-2">
         <div>
           <span class="font-semibold">${esc(e.from_email)}</span>
@@ -228,35 +228,46 @@ async function loadTriage() {
   `}).join('');
 }
 
+// Doppelklick-Schutz: disabled Buttons in der Triage-Card waehrend Request laeuft
+function setTriageCardLoading(msgId, loading) {
+  const card = document.getElementById('triage-card-' + msgId);
+  if (!card) return;
+  const btns = card.querySelectorAll('button');
+  btns.forEach(b => { b.disabled = loading; if (loading) b.classList.add('opacity-50'); else b.classList.remove('opacity-50'); });
+}
+
 async function assignEmail(msgId) {
   const sel = document.getElementById('assign-' + msgId);
   if (!sel || !sel.value) { toast('Bitte Case auswaehlen', false); return; }
+  setTriageCardLoading(msgId, true);
   try {
     await api('/api/dashboard/assign', 'POST', { provider_message_id: msgId, case_id: sel.value });
     toast('E-Mail zugeordnet');
     loadAll();
-  } catch(e) { toast('Fehler: ' + e.message, false); }
+  } catch(e) { toast('Fehler: ' + e.message, false); setTriageCardLoading(msgId, false); }
 }
 
 async function createCaseFromTriage(msgId) {
   const name = document.getElementById('newcase-name-' + msgId).value.trim();
   const email = document.getElementById('newcase-email-' + msgId).value.trim();
   if (!name) { toast('Bitte Name eingeben', false); return; }
+  setTriageCardLoading(msgId, true);
   try {
     const r = await api('/api/dashboard/create-case', 'POST', {
       provider_message_id: msgId, applicant_name: name, partner_email: email
     });
-    toast(`Case ${r.case_id} angelegt`);
+    toast(`Case ${r.case_id} angelegt – OneDrive + Dokumente werden eingerichtet...`);
     loadAll();
-  } catch(e) { toast('Fehler: ' + e.message, false); }
+  } catch(e) { toast('Fehler: ' + e.message, false); setTriageCardLoading(msgId, false); }
 }
 
 async function dismissEmail(msgId) {
+  setTriageCardLoading(msgId, true);
   try {
     await api('/api/dashboard/dismiss', 'POST', { provider_message_id: msgId });
     toast('E-Mail ignoriert');
     loadAll();
-  } catch(e) { toast('Fehler: ' + e.message, false); }
+  } catch(e) { toast('Fehler: ' + e.message, false); setTriageCardLoading(msgId, false); }
 }
 
 let triageMsgIds = [];

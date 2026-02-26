@@ -19,6 +19,7 @@ import case_logic as cases
 import readiness as rdns
 
 N8N_SCAN_WEBHOOK = os.getenv("N8N_SCAN_WEBHOOK", "")
+N8N_SETUP_CASE_WEBHOOK = os.getenv("N8N_SETUP_CASE_WEBHOOK", "")
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -70,9 +71,9 @@ async def dashboard_stats():
 @router.get("/api/dashboard/triage")
 async def dashboard_triage():
     try:
-        # Nur benötigte Spalten laden, body_text auf DB-Ebene begrenzen
+        # Nur benötigte Spalten laden
         triage_cols = [
-            "provider_message_id", "from_email", "subject",
+            "provider_message_id", "from_email", "subject", "body_text",
             "conversation_id", "parsed_result", "matched_by",
             "processed_at", "attachments_count",
         ]
@@ -95,6 +96,7 @@ async def dashboard_triage():
                 "provider_message_id": e.get("provider_message_id"),
                 "from_email": e.get("from_email"),
                 "subject": e.get("subject"),
+                "body_text": (e.get("body_text") or "")[:500],
                 "conversation_id": e.get("conversation_id"),
                 "parsed_result": parsed,
                 "matched_by": e.get("matched_by", ""),
