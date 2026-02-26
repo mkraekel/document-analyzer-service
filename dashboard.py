@@ -578,13 +578,17 @@ async def dashboard_process_gdrive(case_id: str, req: GDriveRequest = None):
                 detail="Keine Google Drive Links gefunden. Bitte Links manuell angeben.",
             )
 
-        result = gdrive.process_google_drive_links(case_id=case_id, links=links)
+        import asyncio
+        # Run blocking Google Drive + GPT analysis in thread pool
+        result = await asyncio.to_thread(
+            gdrive.process_google_drive_links, case_id=case_id, links=links
+        )
 
         # Readiness check after processing
         readiness_result = None
         if result.get("files_processed", 0) > 0:
             try:
-                readiness_result = rdns.check_readiness(case_id)
+                readiness_result = await asyncio.to_thread(rdns.check_readiness, case_id)
                 notify.dispatch_notifications(case_id, readiness_result, force=True)
             except Exception as e:
                 logger.error(f"Readiness after gdrive failed: {e}")

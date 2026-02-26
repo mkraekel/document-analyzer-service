@@ -1990,10 +1990,22 @@ async def process_email(request: ProcessEmailRequest):
     """
     Vollständige E-Mail-Verarbeitungs-Pipeline.
     n8n sendet rohe E-Mail-Daten + Anhänge (base64), Python macht den Rest.
+    Runs in thread pool to avoid blocking the event loop during GPT analysis.
     """
+    import asyncio
     logger.info(f"process-email: {request.from_email} / {request.subject[:60] if request.subject else ''}")
     try:
-        return await _process_email_impl(request)
+        result = await asyncio.to_thread(_process_email_impl, request)
+
+        # Google Drive async task must be started from the event loop (not from thread)
+        gdrive_links = result.get("_gdrive_links")
+        if gdrive_links and result.get("case_id"):
+            logger.info(f"[{result['case_id']}] Google Drive links detected: {len(gdrive_links)} → triggering async processing")
+            asyncio.create_task(_process_gdrive_async(result["case_id"], gdrive_links))
+
+        # Remove internal field before returning
+        result.pop("_gdrive_links", None)
+        return ProcessEmailResponse(**result)
     except Exception as e:
         tb = traceback.format_exc()
         logger.error(f"process-email unhandled error: {tb}")
@@ -2001,17 +2013,22 @@ async def process_email(request: ProcessEmailRequest):
 
 
 async def _process_gdrive_async(case_id: str, links: list):
-    """Background task: process Google Drive links after email processing."""
+    """Background task: process Google Drive links after email processing.
+    Runs blocking work in thread pool to avoid blocking the event loop."""
+    import asyncio
     try:
         import gdrive
-        result = gdrive.process_google_drive_links(case_id=case_id, links=links)
+        # Run blocking Google Drive + GPT analysis in thread pool
+        result = await asyncio.to_thread(
+            gdrive.process_google_drive_links, case_id=case_id, links=links
+        )
         processed = result.get("files_processed", 0)
         logger.info(f"[{case_id}] Google Drive async: {processed} files processed")
 
         # Re-run readiness check after Google Drive files are analyzed
         if processed > 0:
             try:
-                readiness_result = rdns.check_readiness(case_id)
+                readiness_result = await asyncio.to_thread(rdns.check_readiness, case_id)
                 notify.dispatch_notifications(case_id, readiness_result)
             except Exception as e:
                 logger.error(f"[{case_id}] Readiness after gdrive failed: {e}")
@@ -2019,12 +2036,13 @@ async def _process_gdrive_async(case_id: str, links: list):
         logger.error(f"[{case_id}] Google Drive async processing failed: {e}")
 
 
-async def _process_email_impl(request: ProcessEmailRequest):
+def _process_email_impl(request: ProcessEmailRequest):
+    """Synchronous implementation - runs in thread pool via asyncio.to_thread."""
 
     # 1. Dedup-Check
     if db.is_email_processed(request.provider_message_id):
         logger.info(f"E-Mail bereits verarbeitet: {request.provider_message_id}")
-        return ProcessEmailResponse(action="skipped", reason="already_processed")
+        return {"action": "skipped", "reason": "already_processed"}
 
     # 2. Gatekeeper
     gate = cases.gatekeeper(request.from_email, request.subject, request.conversation_id)
@@ -2041,7 +2059,7 @@ async def _process_email_impl(request: ProcessEmailRequest):
     if not gate["pass"]:
         db.log_processed_email(request.provider_message_id, "skipped", gate["reason"],
                                parsed_result={"gate": gate}, **_log_kwargs)
-        return ProcessEmailResponse(action="skipped", reason=gate["reason"])
+        return {"action": "skipped", "reason": gate["reason"]}
 
     # 3. KI-Parsing über bestehenden parse-email Logic
     parsed = {}
@@ -2117,7 +2135,7 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
     if not is_relevant:
         db.log_processed_email(request.provider_message_id, "not_relevant", "irrelevant",
                                parsed_result=parsed, **_log_kwargs)
-        return ProcessEmailResponse(action="skipped", reason="not_relevant")
+        return {"action": "skipped", "reason": "not_relevant"}
 
     # 4. Case Matching
     first_name = parsed.get("applicant_firstName") or ""
@@ -2183,7 +2201,7 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
     elif match["action"] == "triage":
         db.log_processed_email(request.provider_message_id, "triage", "no_case_match",
                                parsed_result=parsed, matched_by=match.get("matched_by"), **_log_kwargs)
-        return ProcessEmailResponse(action="triage", reason="no_case_match")
+        return {"action": "triage", "reason": "no_case_match"}
 
     # 6. Anhänge direkt intern verarbeiten (statt zurück an n8n)
     docs_processed = []
@@ -2249,28 +2267,25 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
     except Exception as e:
         logger.error(f"Readiness check failed: {e}")
 
-    # 7b. Google Drive Links async verarbeiten (falls vorhanden)
+    # 7b. Google Drive Links sammeln (werden vom Endpoint als async Task gestartet)
     gdrive_links = parsed.get("google_drive_links", [])
-    if gdrive_links:
-        import asyncio
-        logger.info(f"[{case_id}] Google Drive links detected: {len(gdrive_links)} → triggering async processing")
-        asyncio.create_task(_process_gdrive_async(case_id, gdrive_links))
 
     # 8. Log
     db.log_processed_email(request.provider_message_id, parsed.get("mail_type", "new_request"), match["action"], case_id,
                            parsed_result=parsed, matched_by=match.get("matched_by"), **_log_kwargs)
 
-    return ProcessEmailResponse(
-        action="processed",
-        case_id=case_id,
-        is_new_case=is_new,
-        status=readiness_result.get("status") if readiness_result else "INTAKE",
-        onedrive_folder_id=request.onedrive_folder_id,
-        needs_onedrive_folder=needs_folder,
-        files_to_upload=[],  # Leer – Anhänge wurden intern verarbeitet
-        google_drive_links=gdrive_links,
-        readiness=readiness_result,
-    )
+    return {
+        "action": "processed",
+        "case_id": case_id,
+        "is_new_case": is_new,
+        "status": readiness_result.get("status") if readiness_result else "INTAKE",
+        "onedrive_folder_id": request.onedrive_folder_id,
+        "needs_onedrive_folder": needs_folder,
+        "files_to_upload": [],
+        "google_drive_links": gdrive_links,
+        "readiness": readiness_result,
+        "_gdrive_links": gdrive_links if gdrive_links else None,  # internal: triggers async GDrive task
+    }
 
 
 class ProcessDocumentRequest(BaseModel):
@@ -2804,7 +2819,10 @@ async def process_google_drive(request: ProcessGoogleDriveRequest):
 
     try:
         import gdrive
-        result = gdrive.process_google_drive_links(
+        import asyncio
+        # Run blocking Google Drive + GPT analysis in thread pool
+        result = await asyncio.to_thread(
+            gdrive.process_google_drive_links,
             case_id=request.case_id,
             links=request.google_drive_links,
         )
@@ -2813,7 +2831,7 @@ async def process_google_drive(request: ProcessGoogleDriveRequest):
         readiness_result = None
         if result.get("files_processed", 0) > 0:
             try:
-                readiness_result = rdns.check_readiness(request.case_id)
+                readiness_result = await asyncio.to_thread(rdns.check_readiness, request.case_id)
                 notify.dispatch_notifications(request.case_id, readiness_result)
             except Exception as e:
                 logger.error(f"Readiness check after gdrive failed: {e}")
