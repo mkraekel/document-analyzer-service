@@ -433,6 +433,12 @@ def compute_effective_view(case_data: dict) -> dict:
                 result[k] = {**result[k], **v}
             else:
                 result[k] = v
+
+    # Top-level Felder aus case_data uebernehmen (nicht in JSON-Blobs gespeichert)
+    for top_key in ["applicant_name", "partner_email"]:
+        if not result.get(top_key) and case_data.get(top_key):
+            result[top_key] = case_data[top_key]
+
     return result
 
 

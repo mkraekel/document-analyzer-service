@@ -242,6 +242,7 @@ def send_partner_questions(case_id: str, partner_email: str, readiness_result: d
 
 def send_broker_questions(case_id: str, readiness_result: dict, effective_view: dict):
     """Sendet interne Rückfrage an Broker/Backoffice"""
+    applicant_name = effective_view.get("applicant_name", "")
     body = _generate_questions_with_ai(
         case_id=case_id,
         missing_financing=readiness_result.get("missing_financing", []),
@@ -254,14 +255,15 @@ def send_broker_questions(case_id: str, readiness_result: dict, effective_view: 
     if not body:
         return
 
+    display_name = applicant_name or case_id
     html_body = f"""<html><body>
-<h3>Interne Rückfrage: {case_id}</h3>
+<h3>Interne Rückfrage: {display_name}</h3>
 <p>{body.replace(chr(10), '<br>')}</p>
 </body></html>"""
 
     _send_email(
         to=BROKER_EMAIL,
-        subject=f"[INTERN] Rückfrage Case {case_id}",
+        subject=f"[INTERN] Rückfrage - {display_name}",
         html_body=html_body,
         text_body=body,
     )
@@ -270,12 +272,13 @@ def send_broker_questions(case_id: str, readiness_result: dict, effective_view: 
 def send_broker_confirmation(case_id: str, effective_view: dict):
     """Sendet Freigabe-Anfrage an Broker wenn alles vollständig"""
     name = effective_view.get("applicant_name", "")
+    display_name = name or case_id
     price = effective_view.get("purchase_price") or _get_nested(effective_view, "property_data.purchase_price") or "k.A."
     loan = effective_view.get("loan_amount") or _get_nested(effective_view, "financing_data.loan_amount") or "k.A."
     equity = effective_view.get("equity_to_use") or _get_nested(effective_view, "financing_data.equity_to_use") or "k.A."
 
     html_body = f"""<html><body>
-<h3>✅ Case bereit für Import: {case_id}</h3>
+<h3>Finanzierungsanfrage bereit: {display_name}</h3>
 <p>Antragsteller: <strong>{name}</strong></p>
 <ul>
   <li>Kaufpreis: {price} €</li>
@@ -283,18 +286,19 @@ def send_broker_confirmation(case_id: str, effective_view: dict):
   <li>Eigenkapital: {equity} €</li>
 </ul>
 <p><strong>Bitte antworten Sie mit "FREIGABE" oder "GENEHMIGT" um den Import zu starten.</strong></p>
-<p>Case-ID: {case_id}</p>
 </body></html>"""
 
     _send_email(
         to=BROKER_EMAIL,
-        subject=f"[FREIGABE] Case {case_id} - {name}",
+        subject=f"[FREIGABE] {display_name} - Bereit fuer Import",
         html_body=html_body,
     )
 
 
 def send_manual_review(case_id: str, readiness_result: dict, effective_view: dict):
     """Sendet Review-Benachrichtigung bei veralteten Dokumenten"""
+    applicant_name = effective_view.get("applicant_name", "")
+    display_name = applicant_name or case_id
     stale = readiness_result.get("stale_docs", [])
     stale_list = "\n".join(f"- {d.get('type', d.get('doc_type', ''))}" for d in stale)
 
@@ -304,7 +308,7 @@ def send_manual_review(case_id: str, readiness_result: dict, effective_view: dic
     )
 
     html_body = f"""<html><body>
-<h3>⚠️ Manuelle Prüfung erforderlich: {case_id}</h3>
+<h3>Manuelle Pruefung erforderlich: {display_name}</h3>
 <p>Folgende Dokumente sind veraltet oder abgelaufen:</p>
 <ul>{"".join(f"<li>{d.get('type', d.get('doc_type', ''))} (vorhanden: {d.get('found',0)}x, benötigt: {d.get('required',1)}x frisch)</li>" for d in stale)}</ul>
 <p>Bitte antworten Sie auf diese E-Mail mit einem oder mehreren der folgenden Kommandos:</p>
@@ -315,12 +319,11 @@ def send_manual_review(case_id: str, readiness_result: dict, effective_view: dic
 <li><code>FREIGABE</code> – alle Checks überspringen und direkt importieren</li>
 </ul>
 <p><small>Mehrere Kommandos können in einer Antwort stehen.</small></p>
-<p>Case-ID: {case_id}</p>
 </body></html>"""
 
     _send_email(
         to=BROKER_EMAIL,
-        subject=f"[REVIEW] Veraltete Dokumente - Case {case_id}",
+        subject=f"[REVIEW] Veraltete Dokumente - {display_name}",
         html_body=html_body,
     )
 
@@ -437,8 +440,9 @@ Wir haben noch keine Rückmeldung zu unserer vorherigen Anfrage erhalten.</em></
             logger.info(f"Reminder für {case_id}: kein Body generiert, überspringe")
             return
 
+        display_name = view.get("applicant_name") or case_id
         html_body = f"""<html><body>
-<h3>{prefix}Interne Rückfrage: {case_id}</h3>
+<h3>{prefix}Interne Rückfrage: {display_name}</h3>
 <p>{body.replace(chr(10), '<br>')}</p>
 <p style="color: #666; font-size: 0.9em;">
 <em>Automatische Erinnerung Nr. {reminder_count}</em></p>
@@ -446,7 +450,7 @@ Wir haben noch keine Rückmeldung zu unserer vorherigen Anfrage erhalten.</em></
 
         _send_email(
             to=BROKER_EMAIL,
-            subject=f"{prefix}[INTERN] Rückfrage Case {case_id}",
+            subject=f"{prefix}[INTERN] Rückfrage - {display_name}",
             html_body=html_body,
             text_body=body,
         )
