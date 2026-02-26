@@ -146,7 +146,9 @@ function statusBadge(status) {
 
 // ── Load All ──
 async function loadAll() {
-  await Promise.all([loadStats(), loadTriage(), loadCases()]);
+  // Cases zuerst laden (wird auch von Triage gebraucht)
+  await Promise.all([loadStats(), loadCases()]);
+  await loadTriage();  // nutzt allCases aus loadCases()
 }
 
 // ── Stats ──
@@ -171,8 +173,7 @@ async function loadStats() {
 // ── Triage ──
 async function loadTriage() {
   const d = await api('/api/dashboard/triage');
-  const cases_d = await api('/api/dashboard/cases');
-  allCases = cases_d.cases || [];
+  // allCases wird bereits von loadCases() befüllt – kein doppelter Fetch
   const list = document.getElementById('triage-list');
   const empty = document.getElementById('triage-empty');
 

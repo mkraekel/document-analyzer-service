@@ -43,27 +43,21 @@ async def dashboard_page():
 @router.get("/api/dashboard/stats")
 async def dashboard_stats():
     try:
-        all_cases = db.list_rows("fin_cases")
-        all_emails = db.list_rows("processed_emails")
-        all_docs = db.list_rows("fin_documents")
+        # Effiziente COUNT-Queries statt SELECT * auf alle Tabellen
+        cases_by_status = db.count_grouped("fin_cases", "status")
+        emails_by_result = db.count_grouped("processed_emails", "processing_result")
+        docs_total = db.count_rows("fin_documents")
 
-        status_counts = {}
-        for c in all_cases:
-            s = c.get("status", "UNKNOWN")
-            status_counts[s] = status_counts.get(s, 0) + 1
-
-        result_counts = {}
-        for e in all_emails:
-            r = e.get("processing_result", "unknown")
-            result_counts[r] = result_counts.get(r, 0) + 1
+        cases_total = sum(cases_by_status.values())
+        emails_total = sum(emails_by_result.values())
 
         return {
-            "cases_total": len(all_cases),
-            "cases_by_status": status_counts,
-            "emails_total": len(all_emails),
-            "emails_by_result": result_counts,
-            "documents_total": len(all_docs),
-            "triage_count": result_counts.get("no_case_match", 0),
+            "cases_total": cases_total,
+            "cases_by_status": cases_by_status,
+            "emails_total": emails_total,
+            "emails_by_result": emails_by_result,
+            "documents_total": docs_total,
+            "triage_count": emails_by_result.get("no_case_match", 0),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -76,9 +70,21 @@ async def dashboard_stats():
 @router.get("/api/dashboard/triage")
 async def dashboard_triage():
     try:
-        emails = db.search_rows("processed_emails", "processing_result", "no_case_match")
+        # Nur benötigte Spalten laden, body_text auf DB-Ebene begrenzen
+        triage_cols = [
+            "provider_message_id", "from_email", "subject",
+            "conversation_id", "parsed_result", "matched_by",
+            "processed_at", "attachments_count",
+        ]
+        rows = db.query_rows(
+            "processed_emails", triage_cols,
+            where="processing_result = %s",
+            where_params=("no_case_match",),
+            order_by="created_at DESC",
+            limit=200,
+        )
         items = []
-        for e in emails:
+        for e in rows:
             parsed = e.get("parsed_result", {})
             if isinstance(parsed, str):
                 try:
@@ -89,7 +95,6 @@ async def dashboard_triage():
                 "provider_message_id": e.get("provider_message_id"),
                 "from_email": e.get("from_email"),
                 "subject": e.get("subject"),
-                "body_text": (e.get("body_text") or "")[:500],
                 "conversation_id": e.get("conversation_id"),
                 "parsed_result": parsed,
                 "matched_by": e.get("matched_by", ""),
@@ -108,9 +113,14 @@ async def dashboard_triage():
 @router.get("/api/dashboard/cases")
 async def dashboard_cases():
     try:
-        all_cases = db.list_rows("fin_cases")
+        # Nur benötigte Spalten statt SELECT * mit allen JSONB-Feldern
+        case_cols = [
+            "case_id", "applicant_name", "partner_email", "status",
+            "onedrive_folder_id", "last_status_change", "readiness",
+        ]
+        rows = db.query_rows("fin_cases", case_cols, order_by="created_at DESC")
         items = []
-        for c in all_cases:
+        for c in rows:
             readiness = c.get("readiness", {})
             if isinstance(readiness, str):
                 try:
@@ -528,16 +538,27 @@ async def dashboard_scan_documents(case_id: str):
 @router.get("/api/dashboard/outgoing-emails")
 async def dashboard_outgoing_emails(case_id: Optional[str] = None):
     try:
-        all_logs = db.list_rows("email_test_log")
+        email_cols = ["to", "subject", "body_text", "body_html", "logged_at", "dry_run"]
+        if case_id:
+            # Filter direkt in SQL statt alle laden + Python-Filter
+            rows = db.query_rows(
+                "email_test_log", email_cols,
+                where="subject LIKE %s",
+                where_params=(f"%{case_id}%",),
+                order_by="created_at DESC",
+                limit=100,
+            )
+        else:
+            rows = db.query_rows(
+                "email_test_log", email_cols,
+                order_by="created_at DESC",
+                limit=100,
+            )
         items = []
-        for e in all_logs:
-            subj = e.get("subject", "")
-            # Filter by case_id if provided
-            if case_id and case_id not in subj:
-                continue
+        for e in rows:
             items.append({
                 "to": e.get("to"),
-                "subject": subj,
+                "subject": e.get("subject", ""),
                 "body_text": (e.get("body_text") or "")[:500],
                 "body_html": (e.get("body_html") or "")[:1000],
                 "logged_at": e.get("logged_at"),
