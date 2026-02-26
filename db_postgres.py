@@ -352,12 +352,12 @@ def ensure_columns(table_name: str, required_columns: list[dict]) -> dict:
 # ──────────────────────────────────────────
 
 def is_email_processed(provider_message_id: str) -> bool:
-    """Check if email was already processed (single indexed query)."""
+    """Check if email was already fully processed (ignores stale locks)."""
     try:
         with _get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT 1 FROM processed_emails WHERE provider_message_id = %s LIMIT 1",
+                    "SELECT 1 FROM processed_emails WHERE provider_message_id = %s AND processing_result != 'lock' LIMIT 1",
                     (provider_message_id,),
                 )
                 return cur.fetchone() is not None
@@ -377,20 +377,30 @@ def log_processed_email(
     attachments_count: int = 0,
     attachments_hashes: list = None,
 ):
-    """Log email as processed. Errors are logged but not raised."""
+    """Log email as processed. Upserts on provider_message_id. Errors are non-fatal."""
     try:
-        create_row("processed_emails", {
-            "provider_message_id": provider_message_id,
-            "mail_type": intent,
-            "processing_result": action,
-            "case_id": case_id or "",
-            "from_email": from_email or "",
-            "subject": subject or "",
-            "conversation_id": conversation_id or "",
-            "processed_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M"),
-            "attachments_count": attachments_count or 0,
-            "attachments_hashes": json.dumps(attachments_hashes or []),
-        })
+        hashes = json.dumps(attachments_hashes or [])
+        now = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                # Upsert: if a lock entry exists, overwrite it with the final result
+                cur.execute("""
+                    INSERT INTO processed_emails
+                        (_id, provider_message_id, mail_type, processing_result, case_id,
+                         from_email, subject, conversation_id, processed_at,
+                         attachments_count, attachments_hashes)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (provider_message_id) DO UPDATE SET
+                        mail_type = EXCLUDED.mail_type,
+                        processing_result = EXCLUDED.processing_result,
+                        case_id = EXCLUDED.case_id,
+                        processed_at = EXCLUDED.processed_at
+                """, (
+                    _new_id(), provider_message_id, intent, action,
+                    case_id or "", from_email or "", subject or "",
+                    conversation_id or "", now,
+                    attachments_count or 0, psycopg2.extras.Json(json.loads(hashes)),
+                ))
     except Exception as e:
         logger.error(f"log_processed_email failed (non-fatal): {e}")
 

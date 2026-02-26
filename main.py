@@ -2013,9 +2013,6 @@ async def _process_email_impl(request: ProcessEmailRequest):
         db.log_processed_email(request.provider_message_id, "skipped", gate["reason"], **_log_kwargs)
         return ProcessEmailResponse(action="skipped", reason=gate["reason"])
 
-    # Sofort als "in Verarbeitung" markieren (Dedup-Lock)
-    db.log_processed_email(request.provider_message_id, "processing", "lock", **_log_kwargs)
-
     # 3. KI-Parsing über bestehenden parse-email Logic
     parsed = {}
     try:

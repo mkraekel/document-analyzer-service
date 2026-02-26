@@ -237,10 +237,10 @@ def ensure_columns(table_name: str, required_columns: list[dict]) -> dict:
 
 
 def is_email_processed(provider_message_id: str) -> bool:
-    """Prüft ob E-Mail bereits verarbeitet wurde"""
-    rows = list_rows("processed_emails")
+    """Prüft ob E-Mail bereits vollständig verarbeitet wurde (ignoriert stale Locks)"""
+    rows = search_rows("processed_emails", "provider_message_id", provider_message_id)
     for r in rows:
-        if r.get("provider_message_id") == provider_message_id:
+        if r.get("processing_result") != "lock":
             return True
     return False
 
