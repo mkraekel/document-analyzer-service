@@ -25,6 +25,19 @@ N8N_SETUP_CASE_WEBHOOK = os.getenv("N8N_SETUP_CASE_WEBHOOK", "")
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# Interne Domains die NICHT als partner_email verwendet werden sollen
+_INTERNAL_DOMAINS = {"alexander-heil.com"}
+
+
+def _safe_partner_email(extracted_email: str | None, fallback_email: str) -> str:
+    """Gibt eine sichere partner_email zurueck. Interne Adressen werden NICHT verwendet."""
+    for email in [extracted_email, fallback_email]:
+        if email and "@" in email:
+            domain = email.rsplit("@", 1)[1].lower()
+            if domain not in _INTERNAL_DOMAINS:
+                return email
+    return ""
+
 
 # ──────────────────────────────────────────
 # Dashboard Page
@@ -424,7 +437,7 @@ async def dashboard_create_case(req: CreateCaseFromTriageRequest):
         cases.create_case(
             case_id=case_id,
             applicant_name=req.applicant_name,
-            partner_email=req.partner_email or email.get("from_email", ""),
+            partner_email=_safe_partner_email(req.partner_email, email.get("from_email", "")),
             partner_phone="",
             conversation_id=conv_id,
             facts=facts,

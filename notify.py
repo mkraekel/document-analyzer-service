@@ -28,6 +28,9 @@ SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER)
 
 BROKER_EMAIL = os.getenv("BROKER_EMAIL", "backoffice@alexander-heil.com")
 
+# Interne Domains: E-Mails an diese Adressen werden NICHT als Partner-Rueckfragen verschickt
+INTERNAL_DOMAINS = {"alexander-heil.com"}
+
 # Dry-Run: EMAIL_DRY_RUN=true → kein echter Versand, Eintrag in SeaTable
 EMAIL_DRY_RUN = os.getenv("EMAIL_DRY_RUN", "false").lower() in ("true", "1", "yes")
 
@@ -127,8 +130,19 @@ def _generate_questions_with_ai(
     applicant_name = effective_view.get("applicant_name") or effective_view.get("applicant_first_name", "")
     case_summary = []
 
+    # Fehlende Finanzierungsdaten: technische Keys in deutsche Labels uebersetzen
+    FINANCING_LABELS = {
+        "purchase_price": "Kaufpreis",
+        "loan_amount": "Darlehenssumme",
+        "equity_to_use": "einzusetzendes Eigenkapital",
+        "object_type": "Objektart (z.B. ETW, Haus)",
+        "usage": "Nutzungsart (Eigennutzung/Kapitalanlage)",
+        "employment_type": "Beschäftigungsart",
+    }
+
     if missing_financing:
-        case_summary.append(f"Fehlende Finanzierungsdaten: {', '.join(missing_financing)}")
+        translated = [FINANCING_LABELS.get(f, f) for f in missing_financing]
+        case_summary.append(f"Fehlende Finanzierungsdaten: {', '.join(translated)}")
     if missing_docs:
         doc_list = ", ".join(f"{d['type']} ({d['required']}x benötigt, {d['found']}x vorhanden)" for d in missing_docs)
         case_summary.append(f"Fehlende Dokumente: {doc_list}")
@@ -140,16 +154,21 @@ def _generate_questions_with_ai(
         return ""
 
     if recipient == "partner":
-        system = """Du bist ein freundlicher Assistent für Baufinanzierungsanfragen.
-Schreibe eine höfliche E-Mail an den Kunden/Partner um fehlende Informationen zu erfragen.
-Sei konkret aber nicht technisch. Deutsch, professionell, freundlich."""
-        prompt = f"""Case: {case_id}
-Antragsteller: {applicant_name}
+        system = """Du bist ein freundlicher Assistent für Baufinanzierungsanfragen bei Alexander Heil Consulting.
+Schreibe eine höfliche E-Mail an den Vertriebspartner um fehlende Informationen/Dokumente zu erfragen.
+WICHTIG:
+- Verwende KEINE Case-IDs oder Referenznummern
+- Nenne den Antragsteller beim Namen
+- Sei konkret aber nicht technisch
+- Deutsch, professionell, freundlich
+- Unterschreibe mit "Mit freundlichen Grüßen" OHNE Firmennamen (wird automatisch ergaenzt)"""
+        prompt = f"""Antragsteller: {applicant_name}
 
 Bitte erfrage folgende fehlenden Informationen/Dokumente:
 {chr(10).join(case_summary)}
 
-Schreibe eine komplette E-Mail (nur Body, ohne Betreff). Beginne mit einer freundlichen Begrüßung."""
+Schreibe eine komplette E-Mail (nur Body, ohne Betreff). Beginne mit einer freundlichen Begrüßung.
+Beziehe dich auf den Antragsteller "{applicant_name}" beim Namen, NICHT auf eine Case-ID."""
     else:
         system = """Du bist ein internes System für Baufinanzierung.
 Schreibe eine prägnante interne Nachricht an den Backoffice-Mitarbeiter."""
@@ -177,8 +196,23 @@ Schreibe eine kurze interne Nachricht mit konkreten Handlungsempfehlungen."""
         return f"Folgende Informationen werden benötigt:\n" + "\n".join(f"- {s}" for s in case_summary)
 
 
+def _is_internal_email(email: str) -> bool:
+    """Prueft ob eine E-Mail-Adresse zu einer internen Domain gehoert."""
+    if not email or "@" not in email:
+        return True
+    domain = email.rsplit("@", 1)[1].lower()
+    return domain in INTERNAL_DOMAINS
+
+
 def send_partner_questions(case_id: str, partner_email: str, readiness_result: dict, effective_view: dict):
     """Sendet Rückfrage-E-Mail an Partner"""
+    if _is_internal_email(partner_email):
+        logger.warning(f"[{case_id}] Partner-E-Mail ist intern ({partner_email}) – "
+                       f"keine Rueckfrage an Partner, leite an Broker weiter")
+        send_broker_questions(case_id, readiness_result, effective_view)
+        return
+
+    applicant_name = effective_view.get("applicant_name", "")
     body = _generate_questions_with_ai(
         case_id=case_id,
         missing_financing=readiness_result.get("missing_financing", []),
@@ -194,13 +228,13 @@ def send_partner_questions(case_id: str, partner_email: str, readiness_result: d
     html_body = f"""<html><body>
 <p>{body.replace(chr(10), '<br>')}</p>
 <br>
-<p>Case-Referenz: <strong>{case_id}</strong></p>
 <p>Mit freundlichen Grüßen<br>Alexander Heil Finanzierung</p>
 </body></html>"""
 
+    subject_name = applicant_name or case_id
     _send_email(
         to=partner_email,
-        subject=f"Rückfrage zu Ihrer Finanzierungsanfrage [{case_id}]",
+        subject=f"Rückfrage zu Ihrer Finanzierungsanfrage - {subject_name}",
         html_body=html_body,
         text_body=body,
     )
@@ -348,6 +382,11 @@ def send_reminder(case_id: str, readiness_result: dict, reminder_count: int, tar
     prefix = f"[{ordinal} Erinnerung] " if ordinal else "[Erinnerung] "
 
     if target == "partner" and partner_email:
+        if _is_internal_email(partner_email):
+            logger.warning(f"Reminder fuer {case_id}: partner_email ist intern ({partner_email}), ueberspringe")
+            return
+
+        applicant_name = view.get("applicant_name", "")
         body = _generate_questions_with_ai(
             case_id=case_id,
             missing_financing=readiness_result.get("missing_financing", []),
@@ -373,13 +412,13 @@ def send_reminder(case_id: str, readiness_result: dict, reminder_count: int, tar
 <em>Dies ist eine automatische Erinnerung (Nr. {reminder_count}).
 Wir haben noch keine Rückmeldung zu unserer vorherigen Anfrage erhalten.</em></p>
 <br>
-<p>Case-Referenz: <strong>{case_id}</strong></p>
 <p>Mit freundlichen Grüßen<br>Alexander Heil Finanzierung</p>
 </body></html>"""
 
+        subject_name = applicant_name or case_id
         _send_email(
             to=partner_email,
-            subject=f"{prefix}Rückfrage zu Ihrer Finanzierungsanfrage [{case_id}]",
+            subject=f"{prefix}Rückfrage zu Ihrer Finanzierungsanfrage - {subject_name}",
             html_body=html_body,
             text_body=body_with_note,
         )

@@ -2046,6 +2046,22 @@ async def _process_gdrive_async(case_id: str, links: list):
         logger.error(f"[{case_id}] Google Drive async processing failed: {e}")
 
 
+# Interne Domains die NICHT als partner_email verwendet werden sollen
+_INTERNAL_DOMAINS = {"alexander-heil.com"}
+
+
+def _safe_partner_email(extracted_email: str | None, fallback_email: str) -> str:
+    """Gibt eine sichere partner_email zurueck. Interne Adressen werden NICHT verwendet."""
+    for email in [extracted_email, fallback_email]:
+        if email and "@" in email:
+            domain = email.rsplit("@", 1)[1].lower()
+            if domain not in _INTERNAL_DOMAINS:
+                return email
+    # Alle Adressen sind intern - leeren String zurueckgeben
+    logger.warning(f"Keine externe partner_email gefunden (extracted={extracted_email}, from={fallback_email})")
+    return ""
+
+
 def _process_email_impl(request: ProcessEmailRequest):
     """Synchronous implementation - runs in thread pool via asyncio.to_thread."""
 
@@ -2181,7 +2197,7 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
         cases.create_case(
             case_id=case_id,
             applicant_name=applicant_name,
-            partner_email=parsed.get("partner_email") or request.from_email,
+            partner_email=_safe_partner_email(parsed.get("partner_email"), request.from_email),
             partner_phone="",
             conversation_id=request.conversation_id,
             facts=facts,
