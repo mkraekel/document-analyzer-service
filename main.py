@@ -1836,6 +1836,10 @@ import readiness as rdns
 import notify
 import traceback
 
+# Eagerly initialize DB connection pool at import time (avoids cold-start delays)
+if hasattr(db, 'init_pool'):
+    db.init_pool()
+
 
 # ============================================
 # TABLE SETUP – fehlende Spalten automatisch anlegen

@@ -43,10 +43,22 @@ def _get_pool():
     if _pool is None:
         if not DATABASE_URL:
             raise RuntimeError("DATABASE_URL is not set!")
-        _pool = psycopg2.pool.ThreadedConnectionPool(1, 10, DATABASE_URL)
+        _pool = psycopg2.pool.ThreadedConnectionPool(
+            1, 10, DATABASE_URL,
+            connect_timeout=10,
+            options="-c statement_timeout=30000",  # 30s query timeout
+        )
         _init_tables()
         logger.info("PostgreSQL connection pool initialized")
     return _pool
+
+
+def init_pool():
+    """Eagerly initialize the connection pool at app startup."""
+    try:
+        _get_pool()
+    except Exception as e:
+        logger.error(f"Failed to init PG pool at startup: {e}")
 
 
 @contextmanager
