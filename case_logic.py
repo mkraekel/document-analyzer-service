@@ -64,17 +64,21 @@ def gatekeeper(from_email: str, subject: str, conversation_id: str = None) -> di
     return {"pass": True, "reason": None, "actor": "partner", "is_internal_reply": False}
 
 
-def _parse_json_field(case: dict, field: str) -> dict:
-    """Parst JSON-String-Felder aus SeaTable sicher"""
+def _parse_json_field(case: dict, field: str, default=None):
+    """Parst JSON-String-Felder sicher. Gibt dict oder list zurück."""
+    if default is None:
+        default = {}
     val = case.get(field)
-    if not val:
-        return {}
-    if isinstance(val, dict):
+    if val is None:
+        return default
+    if isinstance(val, (dict, list)):
         return val
+    if isinstance(val, str) and val.strip() == "":
+        return default
     try:
         return json.loads(val)
     except Exception:
-        return {}
+        return default
 
 
 def load_case(case_id: str) -> Optional[dict]:
@@ -83,10 +87,12 @@ def load_case(case_id: str) -> Optional[dict]:
     if not rows:
         return None
     case = rows[0]
-    # JSON-Felder parsen
+    # JSON-Felder parsen (dict-Felder → default {}, list-Felder → default [])
     for field in ["facts_extracted", "answers_user", "manual_overrides", "derived_values",
-                  "docs_index", "readiness", "audit_log", "actors", "conversation_ids"]:
-        case[f"_{field}"] = _parse_json_field(case, field)
+                  "docs_index", "readiness", "actors"]:
+        case[f"_{field}"] = _parse_json_field(case, field, default={})
+    for field in ["audit_log", "conversation_ids"]:
+        case[f"_{field}"] = _parse_json_field(case, field, default=[])
     return case
 
 
