@@ -8,6 +8,7 @@ Switch via DB_BACKEND=postgres (default) oder DB_BACKEND=seatable.
 import os
 import json
 import logging
+import threading
 import uuid
 from typing import Optional
 from datetime import datetime
@@ -37,11 +38,17 @@ JSONB_COLUMNS = {
 # Connection Pool
 # ──────────────────────────────────────────
 _pool = None
+_pool_lock = threading.Lock()
 
 
 def _get_pool():
     global _pool
-    if _pool is None:
+    if _pool is not None:
+        return _pool
+    with _pool_lock:
+        # Double-check after acquiring lock
+        if _pool is not None:
+            return _pool
         if not DATABASE_URL:
             raise RuntimeError("DATABASE_URL is not set!")
         _pool = psycopg2.pool.ThreadedConnectionPool(

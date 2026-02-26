@@ -43,6 +43,17 @@ app = FastAPI(title="Document Analyzer", version="1.0.0")
 from dashboard import router as dashboard_router
 app.include_router(dashboard_router)
 
+
+@app.on_event("startup")
+async def startup_event():
+    """Start DB pool init in background so health endpoint responds immediately."""
+    import asyncio
+    import seatable as _db
+    if hasattr(_db, 'init_pool'):
+        # Fire-and-forget: DB init runs in background thread, doesn't block startup
+        asyncio.get_event_loop().run_in_executor(None, _db.init_pool)
+        logger.info("DB pool initialization started (background)")
+
 # OpenAI Client
 api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
@@ -286,7 +297,7 @@ async def analyze_document(file: UploadFile = File(...)):
 
 @app.get("/health")
 async def health_check():
-    """Health Check Endpoint"""
+    """Health Check Endpoint - responds immediately, even before DB is ready."""
     return {"status": "healthy", "service": "document-analyzer"}
 
 
@@ -1836,9 +1847,8 @@ import readiness as rdns
 import notify
 import traceback
 
-# Eagerly initialize DB connection pool at import time (avoids cold-start delays)
-if hasattr(db, 'init_pool'):
-    db.init_pool()
+# DB pool is now initialized via FastAPI startup event (see startup_event above)
+# This avoids blocking the server start and allows health checks to pass immediately
 
 
 # ============================================
