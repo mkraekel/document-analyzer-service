@@ -268,21 +268,22 @@ def save_answers(case_id: str, answers: dict, actor: str = "partner", overrides:
     return existing_answers
 
 
-def update_status(case_id: str, status: str, readiness: dict = None):
-    """Status + Readiness Result speichern"""
-    case = load_case(case_id)
+def update_status(case_id: str, status: str, readiness: dict = None, _cached_case: dict = None):
+    """Status + Readiness Result speichern. _cached_case vermeidet doppelten DB-Load."""
+    case = _cached_case or load_case(case_id)
     if not case:
         raise ValueError(f"Case nicht gefunden: {case_id}")
 
+    now = datetime.utcnow().isoformat()
     update_data = {
         "status": status,
-        "last_status_change": datetime.utcnow().isoformat(),
+        "last_status_change": now,
     }
     if readiness:
         update_data["readiness"] = json.dumps(readiness)
 
     audit = case.get("_audit_log", [])
-    audit.append({"event": "status_changed", "ts": datetime.utcnow().isoformat(), "status": status})
+    audit.append({"event": "status_changed", "ts": now, "status": status})
     audit = audit[-100:]
     update_data["audit_log"] = json.dumps(audit)
 
@@ -290,11 +291,11 @@ def update_status(case_id: str, status: str, readiness: dict = None):
 
 
 def update_onedrive_folder(case_id: str, folder_id: str):
-    """OneDrive Folder ID speichern"""
-    case = load_case(case_id)
-    if not case:
+    """OneDrive Folder ID speichern (direkter Update via case_id)"""
+    rows = db.search_rows("fin_cases", "case_id", case_id)
+    if not rows:
         return
-    db.update_row("fin_cases", case["_id"], {"onedrive_folder_id": folder_id})
+    db.update_row("fin_cases", rows[0]["_id"], {"onedrive_folder_id": folder_id})
 
 
 def build_docs_index(case_id: str) -> dict:

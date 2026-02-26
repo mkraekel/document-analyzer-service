@@ -1914,52 +1914,39 @@ async def debug_columns(table_name: str):
     }
 
 
-@app.get("/debug/seatable")
-async def debug_seatable():
-    """Testet SeaTable Verbindung und gibt Details zurück"""
-    import requests as _req
-    results = {}
-    results["env"] = {
-        "SEATABLE_API_TOKEN_set": bool(os.getenv("SEATABLE_API_TOKEN")),
-        "SEATABLE_BASE_UUID_set": bool(os.getenv("SEATABLE_BASE_UUID")),
-        "SEATABLE_BASE_URL": os.getenv("SEATABLE_BASE_URL", "https://cloud.seatable.io"),
-    }
+@app.get("/debug/db")
+async def debug_db():
+    """Testet Datenbankverbindung und gibt Details zurück"""
+    backend = os.getenv("DB_BACKEND", "postgres")
+    results = {"backend": backend}
 
-    try:
-        db.invalidate_token()
-        token = db._get_access_token()
-        results["auth"] = "ok"
-        results["uuid"] = db._get_uuid()
-        results["api_url"] = db._api("rows/")
-    except Exception as e:
-        results["auth"] = f"FAILED: {e}"
-        return results
+    if backend == "seatable":
+        import requests as _req
+        results["env"] = {
+            "SEATABLE_API_TOKEN_set": bool(os.getenv("SEATABLE_API_TOKEN")),
+            "SEATABLE_BASE_UUID_set": bool(os.getenv("SEATABLE_BASE_UUID")),
+            "SEATABLE_BASE_URL": os.getenv("SEATABLE_BASE_URL", "https://cloud.seatable.io"),
+        }
+        try:
+            db.invalidate_token()
+            token = db._get_access_token()
+            results["auth"] = "ok"
+            results["uuid"] = db._get_uuid()
+        except Exception as e:
+            results["auth"] = f"FAILED: {e}"
+            return results
+    else:
+        results["env"] = {
+            "DATABASE_URL_set": bool(os.getenv("DATABASE_URL")),
+        }
 
-    # Tabellen auflisten
-    try:
-        meta_url = db._api("metadata/")
-        r = _req.get(meta_url, headers={"Authorization": f"Bearer {token}"}, timeout=10)
-        if r.ok:
-            tables = [t["name"] for t in r.json().get("metadata", {}).get("tables", [])]
-            results["tables_in_base"] = tables
-        else:
-            results["tables_in_base"] = f"{r.status_code}: {r.text[:200]}"
-    except Exception as e:
-        results["tables_in_base"] = f"FAILED: {e}"
-
-    # fin_cases laden
-    try:
-        rows = db.list_rows("fin_cases")
-        results["fin_cases"] = f"ok – {len(rows)} rows"
-    except Exception as e:
-        results["fin_cases"] = f"FAILED: {e}"
-
-    # processed_emails laden
-    try:
-        rows = db.list_rows("processed_emails")
-        results["processed_emails"] = f"ok – {len(rows)} rows"
-    except Exception as e:
-        results["processed_emails"] = f"FAILED: {e}"
+    # Tabellen testen
+    for table in ["fin_cases", "processed_emails", "fin_documents", "email_test_log"]:
+        try:
+            rows = db.search_rows(table, "_id", "__nonexistent__")
+            results[table] = "ok"
+        except Exception as e:
+            results[table] = f"FAILED: {e}"
 
     return results
 
@@ -2155,7 +2142,10 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
 
     # 6. Anhänge direkt intern verarbeiten (statt zurück an n8n)
     docs_processed = []
+    doc_rows_to_insert = []  # Batch: alle Dokumente sammeln, dann einmal speichern
+    all_new_facts = {}       # Gesammelte Facts aus allen Dokumenten
     if request.attachments:
+        now_ts = datetime.utcnow().isoformat()
         for filename, b64_data in request.attachments.items():
             try:
                 file_bytes = base64.b64decode(b64_data)
@@ -2170,20 +2160,20 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
                 result = analyze_with_gpt4o(file_bytes, mime, filename)
                 extracted = result.get("extracted_data") or {}
 
-                # In fin_documents speichern
-                db.create_row("fin_documents", {
+                # Zeile sammeln (nicht einzeln speichern)
+                doc_rows_to_insert.append({
                     "caseId": case_id,
                     "file_name": filename,
                     "doc_type": result.get("doc_type", "Sonstiges"),
                     "extracted_data": json.dumps(extracted),
                     "processing_status": "completed",
-                    "processed_at": __import__("datetime").datetime.utcnow().isoformat(),
+                    "processed_at": now_ts,
                 })
 
-                # Facts in Case mergen
+                # Facts sammeln (einmal am Ende mergen)
                 new_facts = _map_extracted_to_facts(result.get("doc_type", ""), extracted)
                 if new_facts:
-                    cases.save_facts(case_id, new_facts, source=f"document:{result.get('doc_type', '')}")
+                    all_new_facts = cases.merge_facts(all_new_facts, new_facts)
 
                 docs_processed.append({"filename": filename, "doc_type": result.get("doc_type"), "success": True})
                 logger.info(f"Attachment processed: {filename} → {result.get('doc_type')}")
@@ -2191,6 +2181,20 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
             except Exception as e:
                 logger.error(f"Attachment processing failed for {filename}: {e}")
                 docs_processed.append({"filename": filename, "success": False, "error": str(e)})
+
+        # Batch: alle Dokumente auf einmal speichern (1 DB call statt N)
+        if doc_rows_to_insert:
+            try:
+                db.batch_create_rows("fin_documents", doc_rows_to_insert)
+            except Exception as e:
+                logger.error(f"Batch insert fin_documents failed: {e}")
+
+        # Gesammelte Facts einmal mergen (1 DB call statt N)
+        if all_new_facts:
+            try:
+                cases.save_facts(case_id, all_new_facts, source="document:batch")
+            except Exception as e:
+                logger.error(f"Batch facts merge failed: {e}")
 
     # 7. Readiness Check + Notifications (immer, nachdem alles verarbeitet ist)
     readiness_result = None

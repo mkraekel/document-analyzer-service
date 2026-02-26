@@ -306,8 +306,8 @@ def check_readiness(case_id: str) -> dict:
         "is_complete": status in ("READY_FOR_IMPORT", "AWAITING_BROKER_CONFIRMATION"),
     }
 
-    # In SeaTable speichern
-    cases.update_status(case_id, status, result)
+    # In DB speichern (cached case durchreichen → spart 1 DB call)
+    cases.update_status(case_id, status, result, _cached_case=case)
     logger.info(f"Readiness check for {case_id}: {status} | missing_fin={missing_financing} | missing_docs={len(missing_docs)}")
 
     return result
