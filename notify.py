@@ -11,6 +11,7 @@ DRY-RUN MODUS:
 import os
 import logging
 import smtplib
+import time
 from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -29,6 +30,11 @@ BROKER_EMAIL = os.getenv("BROKER_EMAIL", "backoffice@alexander-heil.com")
 
 # Dry-Run: EMAIL_DRY_RUN=true → kein echter Versand, Eintrag in SeaTable
 EMAIL_DRY_RUN = os.getenv("EMAIL_DRY_RUN", "false").lower() in ("true", "1", "yes")
+
+# Notification Cooldown: verhindert doppelten Versand derselben Notification
+# Key = (case_id, status), Value = timestamp des letzten Versands
+NOTIFICATION_COOLDOWN_SECONDS = int(os.getenv("NOTIFICATION_COOLDOWN_SECONDS", "600"))  # 10 min
+_notification_cooldown: dict[tuple[str, str], float] = {}
 
 _openai = None
 
@@ -295,13 +301,49 @@ def _get_nested(obj: dict, path: str):
     return current
 
 
-def dispatch_notifications(case_id: str, readiness_result: dict):
+def _check_cooldown(case_id: str, status: str) -> bool:
+    """
+    Prüft ob für (case_id, status) kürzlich schon eine Notification gesendet wurde.
+    Gibt True zurück wenn die Notification gesendet werden darf (kein Cooldown aktiv).
+    Räumt nebenbei abgelaufene Einträge auf.
+    """
+    now = time.time()
+    key = (case_id, status)
+
+    # Abgelaufene Einträge aufräumen (max alle 100 Einträge)
+    if len(_notification_cooldown) > 100:
+        expired = [k for k, ts in _notification_cooldown.items() if now - ts > NOTIFICATION_COOLDOWN_SECONDS]
+        for k in expired:
+            del _notification_cooldown[k]
+
+    last_sent = _notification_cooldown.get(key)
+    if last_sent and (now - last_sent) < NOTIFICATION_COOLDOWN_SECONDS:
+        elapsed = int(now - last_sent)
+        logger.info(f"Notification cooldown aktiv für {case_id}/{status} "
+                     f"(vor {elapsed}s gesendet, Cooldown {NOTIFICATION_COOLDOWN_SECONDS}s)")
+        return False
+
+    return True
+
+
+def _record_cooldown(case_id: str, status: str):
+    """Speichert den Zeitpunkt des Versands für Cooldown-Tracking."""
+    _notification_cooldown[(case_id, status)] = time.time()
+
+
+def dispatch_notifications(case_id: str, readiness_result: dict, force: bool = False):
     """
     Sendet die richtige Benachrichtigung basierend auf Status.
     Wird nach jedem Readiness Check aufgerufen.
+
+    force=True überspringt den Cooldown (z.B. bei manuellem Recheck aus Dashboard).
     """
     status = readiness_result.get("status")
     view = readiness_result.get("effective_view", {})
+
+    # Cooldown Check: verhindert doppelten Versand bei schnell aufeinanderfolgenden Mails
+    if not force and not _check_cooldown(case_id, status):
+        return
 
     import case_logic as cases
     case = cases.load_case(case_id)
@@ -309,15 +351,19 @@ def dispatch_notifications(case_id: str, readiness_result: dict):
 
     if status == "NEEDS_QUESTIONS_PARTNER":
         send_partner_questions(case_id, partner_email, readiness_result, view)
+        _record_cooldown(case_id, status)
 
     elif status == "NEEDS_QUESTIONS_BROKER":
         send_broker_questions(case_id, readiness_result, view)
+        _record_cooldown(case_id, status)
 
     elif status == "NEEDS_MANUAL_REVIEW_BROKER":
         send_manual_review(case_id, readiness_result, view)
+        _record_cooldown(case_id, status)
 
     elif status == "AWAITING_BROKER_CONFIRMATION":
         send_broker_confirmation(case_id, view)
+        _record_cooldown(case_id, status)
 
     elif status == "READY_FOR_IMPORT":
         logger.info(f"Case {case_id} ready for import – triggering import builder")

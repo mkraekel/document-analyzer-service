@@ -436,6 +436,63 @@ def log_processed_email(
 
 
 # ──────────────────────────────────────────
+# Efficient queries for dashboard
+# ──────────────────────────────────────────
+
+def count_rows(table_name: str) -> int:
+    """Schnelles COUNT(*) statt SELECT *."""
+    try:
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"SELECT COUNT(*) FROM {table_name}")
+                return cur.fetchone()[0]
+    except Exception as e:
+        logger.error(f"PG count_rows({table_name}) failed: {e}")
+        return 0
+
+
+def count_grouped(table_name: str, column: str) -> dict[str, int]:
+    """GROUP BY COUNT für eine Spalte. Gibt {value: count} zurück."""
+    try:
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                col = _quote_col(column)
+                cur.execute(f"SELECT {col}, COUNT(*) FROM {table_name} GROUP BY {col}")
+                return {row[0] or "": row[1] for row in cur.fetchall()}
+    except Exception as e:
+        logger.error(f"PG count_grouped({table_name}, {column}) failed: {e}")
+        return {}
+
+
+def query_rows(table_name: str, columns: list[str], where: str = None,
+               where_params: tuple = None, order_by: str = "created_at DESC",
+               limit: int = None) -> list[dict]:
+    """Flexible query mit spezifischen Spalten statt SELECT *."""
+    try:
+        cols = ", ".join(_quote_col(c) for c in columns)
+        sql = f"SELECT {cols} FROM {table_name}"
+        params = []
+        if where:
+            sql += f" WHERE {where}"
+            if where_params:
+                params.extend(where_params)
+        if order_by:
+            sql += f" ORDER BY {order_by}"
+        if limit:
+            sql += f" LIMIT %s"
+            params.append(limit)
+
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params or None)
+                rows = cur.fetchall()
+                return [dict(zip(columns, row)) for row in rows]
+    except Exception as e:
+        logger.error(f"PG query_rows({table_name}) failed: {e}")
+        return []
+
+
+# ──────────────────────────────────────────
 # SeaTable compat stubs (for debug endpoints)
 # ──────────────────────────────────────────
 

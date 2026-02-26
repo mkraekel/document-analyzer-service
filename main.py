@@ -2437,6 +2437,7 @@ async def ingest_answers(request: IngestAnswersRequest):
 class FullReadinessRequest(BaseModel):
     case_id: str
     send_notifications: bool = True
+    force_notifications: bool = False  # Cooldown überspringen (manueller Recheck)
 
 @app.post("/full-readiness-check")
 async def full_readiness_check(request: FullReadinessRequest):
@@ -2448,7 +2449,7 @@ async def full_readiness_check(request: FullReadinessRequest):
     try:
         result = rdns.check_readiness(request.case_id)
         if request.send_notifications:
-            notify.dispatch_notifications(request.case_id, result)
+            notify.dispatch_notifications(request.case_id, result, force=request.force_notifications)
         return result
     except Exception as e:
         logger.error(f"full-readiness-check failed: {e}")
