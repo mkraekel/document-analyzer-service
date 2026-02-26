@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Finanzierung Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  .tab-active { border-bottom: 3px solid #2563eb; color: #2563eb; font-weight: 600; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; }
+  .badge-green { background: #dcfce7; color: #166534; }
+  .badge-yellow { background: #fef9c3; color: #854d0e; }
+  .badge-red { background: #fee2e2; color: #991b1b; }
+  .badge-blue { background: #dbeafe; color: #1e40af; }
+  .badge-gray { background: #f3f4f6; color: #374151; }
+  pre.json { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; font-size: 0.8rem; overflow-x: auto; max-height: 300px; }
+  .card { background: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 20px; }
+  .toast { position: fixed; bottom: 20px; right: 20px; padding: 12px 24px; border-radius: 8px; color: white; z-index: 999; transition: opacity 0.3s; }
+</style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+<!-- Header -->
+<header class="bg-white border-b sticky top-0 z-50">
+  <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+    <h1 class="text-xl font-bold text-gray-800">Finanzierung Dashboard</h1>
+    <button onclick="loadAll()" class="text-sm bg-gray-100 hover:bg-gray-200 px-3 py-1 rounded">Aktualisieren</button>
+  </div>
+  <div class="max-w-7xl mx-auto px-4 flex gap-6">
+    <button onclick="showTab('overview')" id="tab-overview" class="py-3 text-sm tab-active">Uebersicht</button>
+    <button onclick="showTab('triage')" id="tab-triage" class="py-3 text-sm text-gray-500 hover:text-gray-800">Triage <span id="triage-badge" class="badge badge-red hidden">0</span></button>
+    <button onclick="showTab('cases')" id="tab-cases" class="py-3 text-sm text-gray-500 hover:text-gray-800">Cases</button>
+  </div>
+</header>
+
+<!-- Content -->
+<main class="max-w-7xl mx-auto px-4 py-6">
+
+  <!-- Overview Tab -->
+  <div id="panel-overview">
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6" id="stats-cards"></div>
+    <div class="card">
+      <h3 class="font-semibold mb-3">Cases nach Status</h3>
+      <div id="status-bars"></div>
+    </div>
+  </div>
+
+  <!-- Triage Tab -->
+  <div id="panel-triage" class="hidden">
+    <div id="triage-list" class="space-y-4"></div>
+    <p id="triage-empty" class="text-gray-400 text-center py-12 hidden">Keine E-Mails in der Triage-Queue.</p>
+  </div>
+
+  <!-- Cases Tab -->
+  <div id="panel-cases" class="hidden">
+    <div id="cases-list" class="space-y-4"></div>
+  </div>
+
+  <!-- Case Detail (shown inline) -->
+  <div id="panel-detail" class="hidden">
+    <button onclick="showTab('cases')" class="text-blue-600 hover:underline mb-4 inline-block">&larr; Zurueck</button>
+    <div id="detail-content"></div>
+  </div>
+
+</main>
+
+<!-- Toast -->
+<div id="toast" class="toast bg-green-600 opacity-0 pointer-events-none">Gespeichert</div>
+
+<script>
+const API = '';
+let allCases = [];
+
+// ── Tabs ──
+function showTab(tab) {
+  ['overview','triage','cases','detail'].forEach(t => {
+    document.getElementById('panel-'+t).classList.toggle('hidden', t !== tab);
+    const btn = document.getElementById('tab-'+t);
+    if (btn) {
+      btn.classList.toggle('tab-active', t === tab);
+      btn.classList.toggle('text-gray-500', t !== tab);
+    }
+  });
+}
+
+// ── Toast ──
+function toast(msg, ok=true) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = `toast ${ok ? 'bg-green-600' : 'bg-red-600'} opacity-100`;
+  setTimeout(() => t.className = 'toast bg-green-600 opacity-0 pointer-events-none', 3000);
+}
+
+// ── API Helper ──
+async function api(path, method='GET', body=null) {
+  const opts = { method, headers: {'Content-Type':'application/json'} };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(API + path, opts);
+  if (!r.ok) {
+    const err = await r.text();
+    throw new Error(err);
+  }
+  return r.json();
+}
+
+// ── Status Badge ──
+function statusBadge(status) {
+  const map = {
+    'INTAKE': 'badge-gray', 'WAITING_FOR_DOCUMENTS': 'badge-yellow',
+    'NEEDS_QUESTIONS_PARTNER': 'badge-yellow', 'NEEDS_QUESTIONS_BROKER': 'badge-yellow',
+    'NEEDS_MANUAL_REVIEW_BROKER': 'badge-red', 'AWAITING_BROKER_CONFIRMATION': 'badge-blue',
+    'READY_FOR_IMPORT': 'badge-green', 'IMPORTED': 'badge-green',
+  };
+  return `<span class="badge ${map[status] || 'badge-gray'}">${status}</span>`;
+}
+
+// ── Load All ──
+async function loadAll() {
+  await Promise.all([loadStats(), loadTriage(), loadCases()]);
+}
+
+// ── Stats ──
+async function loadStats() {
+  const d = await api('/api/dashboard/stats');
+  document.getElementById('stats-cards').innerHTML = `
+    <div class="card text-center"><div class="text-3xl font-bold text-blue-600">${d.cases_total}</div><div class="text-sm text-gray-500">Cases</div></div>
+    <div class="card text-center"><div class="text-3xl font-bold text-red-500">${d.triage_count}</div><div class="text-sm text-gray-500">Triage</div></div>
+    <div class="card text-center"><div class="text-3xl font-bold text-purple-600">${d.documents_total}</div><div class="text-sm text-gray-500">Dokumente</div></div>
+    <div class="card text-center"><div class="text-3xl font-bold text-gray-600">${d.emails_total}</div><div class="text-sm text-gray-500">E-Mails</div></div>
+  `;
+  const badge = document.getElementById('triage-badge');
+  if (d.triage_count > 0) { badge.textContent = d.triage_count; badge.classList.remove('hidden'); }
+  else { badge.classList.add('hidden'); }
+
+  const bars = Object.entries(d.cases_by_status || {}).map(([s,c]) =>
+    `<div class="flex items-center gap-3 mb-2">${statusBadge(s)}<span class="text-sm font-mono">${c}x</span></div>`
+  ).join('');
+  document.getElementById('status-bars').innerHTML = bars || '<span class="text-gray-400">Keine Cases</span>';
+}
+
+// ── Triage ──
+async function loadTriage() {
+  const d = await api('/api/dashboard/triage');
+  const cases_d = await api('/api/dashboard/cases');
+  allCases = cases_d.cases || [];
+  const list = document.getElementById('triage-list');
+  const empty = document.getElementById('triage-empty');
+
+  if (!d.triage || d.triage.length === 0) {
+    list.innerHTML = '';
+    empty.classList.remove('hidden');
+    return;
+  }
+  empty.classList.add('hidden');
+
+  const caseOpts = allCases.map(c => `<option value="${c.case_id}">${c.case_id} - ${c.applicant_name}</option>`).join('');
+
+  list.innerHTML = d.triage.map(e => `
+    <div class="card">
+      <div class="flex justify-between items-start mb-2">
+        <div>
+          <span class="font-semibold">${esc(e.from_email)}</span>
+          <span class="text-gray-400 text-sm ml-2">${e.processed_at || ''}</span>
+        </div>
+        <span class="badge badge-red">Triage</span>
+      </div>
+      <div class="font-medium mb-1">${esc(e.subject)}</div>
+      <div class="text-sm text-gray-600 mb-3 whitespace-pre-line">${esc(e.body_text)}</div>
+      ${e.parsed_result && Object.keys(e.parsed_result).length > 0
+        ? `<details class="mb-3"><summary class="text-xs text-gray-400 cursor-pointer">GPT Parsing</summary><pre class="json">${esc(JSON.stringify(e.parsed_result, null, 2))}</pre></details>`
+        : ''}
+      <div class="flex gap-2 items-center flex-wrap">
+        <select id="assign-${e.provider_message_id}" class="border rounded px-2 py-1 text-sm">
+          <option value="">Case auswaehlen...</option>
+          ${caseOpts}
+        </select>
+        <button onclick="assignEmail('${e.provider_message_id}')" class="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700">Zuordnen</button>
+        <button onclick="dismissEmail('${e.provider_message_id}')" class="bg-gray-200 text-gray-700 px-3 py-1 rounded text-sm hover:bg-gray-300">Ignorieren</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function assignEmail(msgId) {
+  const sel = document.getElementById('assign-' + msgId);
+  if (!sel || !sel.value) { toast('Bitte Case auswaehlen', false); return; }
+  try {
+    await api('/api/dashboard/assign', 'POST', { provider_message_id: msgId, case_id: sel.value });
+    toast('E-Mail zugeordnet');
+    loadAll();
+  } catch(e) { toast('Fehler: ' + e.message, false); }
+}
+
+async function dismissEmail(msgId) {
+  try {
+    await api('/api/dashboard/dismiss', 'POST', { provider_message_id: msgId });
+    toast('E-Mail ignoriert');
+    loadAll();
+  } catch(e) { toast('Fehler: ' + e.message, false); }
+}
+
+// ── Cases ──
+async function loadCases() {
+  const d = await api('/api/dashboard/cases');
+  allCases = d.cases || [];
+  document.getElementById('cases-list').innerHTML = allCases.map(c => `
+    <div class="card cursor-pointer hover:shadow-md transition" onclick="openCase('${c.case_id}')">
+      <div class="flex justify-between items-start mb-1">
+        <div>
+          <span class="font-mono text-sm text-gray-500">${c.case_id}</span>
+          ${statusBadge(c.status)}
+        </div>
+        <span class="text-sm text-gray-400">${c.last_status_change ? c.last_status_change.substring(0,16) : ''}</span>
+      </div>
+      <div class="font-semibold text-lg">${esc(c.applicant_name || 'Unbekannt')}</div>
+      <div class="text-sm text-gray-500">${esc(c.partner_email || '')}</div>
+      <div class="mt-2 flex gap-4 text-xs text-gray-500">
+        ${c.missing_financing.length > 0 ? `<span class="text-red-500">Fehlende Daten: ${c.missing_financing.join(', ')}</span>` : ''}
+        ${c.missing_docs_count > 0 ? `<span class="text-yellow-600">${c.missing_docs_count} Dokumente fehlen</span>` : '<span class="text-green-600">Docs vollstaendig</span>'}
+        ${c.overrides_applied.length > 0 ? `<span class="text-purple-600">${c.overrides_applied.length} Override(s)</span>` : ''}
+      </div>
+    </div>
+  `).join('') || '<p class="text-gray-400 text-center py-12">Keine Cases vorhanden.</p>';
+}
+
+// ── Case Detail ──
+async function openCase(caseId) {
+  showTab('detail');
+  document.getElementById('detail-content').innerHTML = '<p class="text-gray-400">Laden...</p>';
+  try {
+    const c = await api('/api/dashboard/case/' + caseId);
+    const readiness = c.readiness || {};
+
+    document.getElementById('detail-content').innerHTML = `
+      <div class="card mb-4">
+        <div class="flex justify-between items-start mb-4">
+          <div>
+            <h2 class="text-2xl font-bold">${esc(c.applicant_name || 'Unbekannt')}</h2>
+            <span class="font-mono text-gray-500">${c.case_id}</span>
+          </div>
+          ${statusBadge(c.status)}
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+          <div><span class="text-gray-400">Partner</span><br>${esc(c.partner_email)}</div>
+          <div><span class="text-gray-400">Letzte Aenderung</span><br>${c.last_status_change ? c.last_status_change.substring(0,16) : '-'}</div>
+          <div><span class="text-gray-400">OneDrive</span><br>${c.onedrive_folder_id ? 'Vorhanden' : 'Kein Ordner'}</div>
+          <div><span class="text-gray-400">Conversations</span><br>${(c.conversation_ids || []).length}</div>
+        </div>
+      </div>
+
+      <!-- Quick Actions -->
+      <div class="card mb-4">
+        <h3 class="font-semibold mb-3">Aktionen</h3>
+        <div class="flex gap-2 flex-wrap">
+          <button onclick="caseAction('${caseId}','FREIGABE')" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">FREIGABE</button>
+          <button onclick="caseAction('${caseId}','WAIT_FOR_DOCS')" class="bg-yellow-500 text-white px-4 py-2 rounded hover:bg-yellow-600">WAIT_FOR_DOCS</button>
+          <button onclick="caseAction('${caseId}','RECHECK')" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">Recheck</button>
+        </div>
+        <div class="mt-3 flex gap-2 items-center">
+          <input id="override-key" type="text" placeholder="Override Key (z.B. accept_stale_kontoauszug)" class="border rounded px-2 py-1 text-sm flex-1">
+          <button onclick="setOverride('${caseId}')" class="bg-purple-600 text-white px-3 py-1 rounded text-sm hover:bg-purple-700">Override setzen</button>
+        </div>
+      </div>
+
+      <!-- Readiness -->
+      <div class="card mb-4">
+        <h3 class="font-semibold mb-3">Readiness Check</h3>
+        ${readiness.missing_financing && readiness.missing_financing.length > 0
+          ? `<div class="mb-2"><span class="text-red-500 font-medium">Fehlende Finanzierungsdaten:</span> ${readiness.missing_financing.join(', ')}</div>` : ''}
+        ${readiness.missing_broker && readiness.missing_broker.length > 0
+          ? `<div class="mb-2"><span class="text-red-500 font-medium">Fehlende Broker-Daten:</span> ${readiness.missing_broker.join(', ')}</div>` : ''}
+        ${readiness.missing_docs && readiness.missing_docs.length > 0
+          ? `<div class="mb-2"><span class="text-yellow-600 font-medium">Fehlende Dokumente:</span><ul class="ml-4 text-sm">${readiness.missing_docs.map(d => `<li>${d.type} (${d.found}/${d.required})</li>`).join('')}</ul></div>` : ''}
+        ${readiness.stale_docs && readiness.stale_docs.length > 0
+          ? `<div class="mb-2"><span class="text-orange-500 font-medium">Veraltete Dokumente:</span> ${readiness.stale_docs.map(d => d.type).join(', ')}</div>` : ''}
+        ${readiness.manual_overrides_applied && readiness.manual_overrides_applied.length > 0
+          ? `<div class="mb-2"><span class="text-purple-600 font-medium">Overrides:</span> ${readiness.manual_overrides_applied.join(', ')}</div>` : ''}
+        ${readiness.is_complete ? '<div class="text-green-600 font-bold mt-2">Case ist vollstaendig!</div>' : ''}
+      </div>
+
+      <!-- Facts -->
+      <div class="card mb-4">
+        <details>
+          <summary class="font-semibold cursor-pointer">Facts Extracted</summary>
+          <pre class="json mt-2">${esc(JSON.stringify(c.facts_extracted, null, 2))}</pre>
+        </details>
+      </div>
+
+      <!-- Answers & Overrides -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+        <div class="card">
+          <details>
+            <summary class="font-semibold cursor-pointer">Answers</summary>
+            <pre class="json mt-2">${esc(JSON.stringify(c.answers_user, null, 2))}</pre>
+          </details>
+        </div>
+        <div class="card">
+          <details>
+            <summary class="font-semibold cursor-pointer">Manual Overrides</summary>
+            <pre class="json mt-2">${esc(JSON.stringify(c.manual_overrides, null, 2))}</pre>
+          </details>
+        </div>
+      </div>
+
+      <!-- Documents -->
+      <div class="card mb-4">
+        <h3 class="font-semibold mb-3">Dokumente (${c.documents.length})</h3>
+        ${c.documents.length > 0 ? `
+          <table class="w-full text-sm">
+            <thead><tr class="text-left text-gray-400"><th>Datei</th><th>Typ</th><th>Status</th><th>Datum</th></tr></thead>
+            <tbody>${c.documents.map(d => `
+              <tr class="border-t"><td>${esc(d.file_name)}</td><td>${esc(d.doc_type)}</td>
+              <td><span class="badge ${d.processing_status==='completed'?'badge-green':'badge-red'}">${d.processing_status}</span></td>
+              <td class="text-gray-400">${d.processed_at || ''}</td></tr>
+            `).join('')}</tbody>
+          </table>
+        ` : '<p class="text-gray-400 text-sm">Keine Dokumente vorhanden.</p>'}
+      </div>
+
+      <!-- E-Mails -->
+      <div class="card mb-4">
+        <h3 class="font-semibold mb-3">Zugeordnete E-Mails (${c.emails.length})</h3>
+        ${c.emails.map(e => `
+          <div class="border-t py-2 flex justify-between items-center">
+            <div>
+              <span class="font-medium text-sm">${esc(e.subject || '')}</span>
+              <span class="text-gray-400 text-xs ml-2">${esc(e.from_email)}</span>
+            </div>
+            <div class="flex gap-2 items-center">
+              <span class="badge badge-gray">${e.mail_type}</span>
+              <span class="badge ${e.processing_result==='create'?'badge-green':e.processing_result==='update'?'badge-blue':'badge-gray'}">${e.processing_result}</span>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+
+      <!-- Audit Log -->
+      <div class="card">
+        <details>
+          <summary class="font-semibold cursor-pointer">Audit Log (letzte 20)</summary>
+          <div class="mt-2 space-y-1 text-sm">
+            ${(c.audit_log || []).reverse().map(a => `
+              <div class="flex gap-3 text-gray-600">
+                <span class="text-gray-400 font-mono text-xs">${(a.ts||'').substring(0,16)}</span>
+                <span>${esc(a.event)}${a.status ? ' → '+a.status : ''}${a.source ? ' ('+a.source+')' : ''}</span>
+              </div>
+            `).join('')}
+          </div>
+        </details>
+      </div>
+    `;
+  } catch(e) {
+    document.getElementById('detail-content').innerHTML = `<div class="text-red-500">Fehler: ${esc(e.message)}</div>`;
+  }
+}
+
+async function caseAction(caseId, action) {
+  try {
+    const r = await api('/api/dashboard/case/' + caseId + '/action', 'POST', { action });
+    toast(`${action} → ${r.status}`);
+    openCase(caseId);
+    loadStats();
+  } catch(e) { toast('Fehler: ' + e.message, false); }
+}
+
+async function setOverride(caseId) {
+  const key = document.getElementById('override-key').value.trim();
+  if (!key) { toast('Bitte Override Key eingeben', false); return; }
+  try {
+    const r = await api('/api/dashboard/case/' + caseId + '/override', 'POST', { key, value: 'true' });
+    toast(`Override ${key} gesetzt → ${r.status}`);
+    document.getElementById('override-key').value = '';
+    openCase(caseId);
+  } catch(e) { toast('Fehler: ' + e.message, false); }
+}
+
+function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+// Init
+loadAll();
+</script>
+</body>
+</html>

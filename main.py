@@ -39,6 +39,10 @@ from typing import Optional
 
 app = FastAPI(title="Document Analyzer", version="1.0.0")
 
+# Dashboard
+from dashboard import router as dashboard_router
+app.include_router(dashboard_router)
+
 # OpenAI Client
 api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
