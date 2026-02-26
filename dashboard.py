@@ -374,6 +374,7 @@ class CreateCaseFromTriageRequest(BaseModel):
 async def dashboard_create_case(req: CreateCaseFromTriageRequest):
     try:
         import time
+        import asyncio
 
         # 1. E-Mail laden
         emails = db.search_rows("processed_emails", "provider_message_id", req.provider_message_id)
@@ -421,12 +422,35 @@ async def dashboard_create_case(req: CreateCaseFromTriageRequest):
         # 4. Readiness check
         result = rdns.check_readiness(case_id)
 
+        # 5. n8n Setup-Case Webhook triggern (OneDrive-Ordner + Attachments re-analysieren)
+        #    Läuft async im Hintergrund – Dashboard wartet nicht darauf
+        if N8N_SETUP_CASE_WEBHOOK:
+            asyncio.create_task(_trigger_setup_case(
+                case_id=case_id,
+                outlook_message_id=req.provider_message_id,
+            ))
+
         return {"success": True, "case_id": case_id, "status": result.get("status")}
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Create case failed: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _trigger_setup_case(case_id: str, outlook_message_id: str):
+    """Triggert n8n Setup-Case Webhook im Hintergrund (OneDrive + Attachment-Analyse)."""
+    try:
+        async with httpx.AsyncClient(timeout=180) as client:
+            resp = await client.post(N8N_SETUP_CASE_WEBHOOK, json={
+                "case_id": case_id,
+                "outlook_message_id": outlook_message_id,
+            })
+            resp.raise_for_status()
+            result = resp.json()
+            logger.info(f"Setup-case webhook OK for {case_id}: {result.get('message', '')}")
+    except Exception as e:
+        logger.error(f"Setup-case webhook failed for {case_id}: {e}")
 
 
 # ──────────────────────────────────────────
