@@ -1833,6 +1833,87 @@ import notify
 import traceback
 
 
+# ============================================
+# TABLE SETUP – fehlende Spalten automatisch anlegen
+# ============================================
+
+REQUIRED_TABLE_COLUMNS = {
+    "processed_emails": [
+        {"column_name": "provider_message_id", "column_type": "text"},
+        {"column_name": "mail_type", "column_type": "text"},
+        {"column_name": "processing_result", "column_type": "text"},
+        {"column_name": "case_id", "column_type": "text"},
+        {"column_name": "from_email", "column_type": "text"},
+        {"column_name": "subject", "column_type": "text"},
+        {"column_name": "conversation_id", "column_type": "text"},
+        {"column_name": "processed_at", "column_type": "text"},
+        {"column_name": "attachments_count", "column_type": "number"},
+        {"column_name": "attachments_hashes", "column_type": "long-text"},
+    ],
+    "fin_cases": [
+        {"column_name": "case_id", "column_type": "text"},
+        {"column_name": "applicant_name", "column_type": "text"},
+        {"column_name": "partner_email", "column_type": "text"},
+        {"column_name": "status", "column_type": "text"},
+        {"column_name": "sources", "column_type": "text"},
+        {"column_name": "facts_extracted", "column_type": "long-text"},
+        {"column_name": "answers_user", "column_type": "long-text"},
+        {"column_name": "manual_overrides", "column_type": "long-text"},
+        {"column_name": "derived_values", "column_type": "long-text"},
+        {"column_name": "docs_index", "column_type": "long-text"},
+        {"column_name": "readiness", "column_type": "long-text"},
+        {"column_name": "audit_log", "column_type": "long-text"},
+        {"column_name": "conversation_ids", "column_type": "long-text"},
+        {"column_name": "onedrive_folder_id", "column_type": "text"},
+        {"column_name": "last_status_change", "column_type": "text"},
+    ],
+    "fin_documents": [
+        {"column_name": "caseId", "column_type": "text"},
+        {"column_name": "onedrive_file_id", "column_type": "text"},
+        {"column_name": "file_name", "column_type": "text"},
+        {"column_name": "doc_type", "column_type": "text"},
+        {"column_name": "extracted_data", "column_type": "long-text"},
+        {"column_name": "processing_status", "column_type": "text"},
+        {"column_name": "error_message", "column_type": "text"},
+        {"column_name": "processed_at", "column_type": "text"},
+    ],
+    "email_test_log": [
+        {"column_name": "to", "column_type": "text"},
+        {"column_name": "subject", "column_type": "text"},
+        {"column_name": "body_text", "column_type": "long-text"},
+        {"column_name": "body_html", "column_type": "long-text"},
+        {"column_name": "logged_at", "column_type": "text"},
+        {"column_name": "dry_run", "column_type": "checkbox"},
+    ],
+}
+
+
+@app.post("/setup/tables")
+async def setup_tables():
+    """
+    Stellt sicher dass alle benötigten Spalten in allen Tabellen existieren.
+    Einmal aufrufen nach dem Deployment – fehlende Spalten werden angelegt.
+    """
+    results = {}
+    for table_name, columns in REQUIRED_TABLE_COLUMNS.items():
+        try:
+            result = db.ensure_columns(table_name, columns)
+            results[table_name] = result
+        except Exception as e:
+            results[table_name] = {"error": str(e)}
+    return results
+
+
+@app.get("/debug/columns/{table_name}")
+async def debug_columns(table_name: str):
+    """Zeigt alle Spalten einer Tabelle an"""
+    columns = db.get_columns(table_name)
+    return {
+        "table": table_name,
+        "columns": [{"name": c["name"], "type": c.get("type", "?")} for c in columns]
+    }
+
+
 @app.get("/debug/seatable")
 async def debug_seatable():
     """Testet SeaTable Verbindung und gibt Details zurück"""

@@ -175,6 +175,67 @@ def batch_create_rows(table_name: str, rows: list[dict]) -> dict:
         raise
 
 
+def get_columns(table_name: str) -> list[dict]:
+    """Gibt alle Spalten einer Tabelle zurück"""
+    try:
+        token = _get_access_token()
+        uuid = _get_uuid()
+        url = f"{SEATABLE_BASE_URL}/api-gateway/api/v2/dtables/{uuid}/metadata/"
+        resp = requests.get(url, headers=_headers(), timeout=10)
+        resp.raise_for_status()
+        tables = resp.json().get("metadata", {}).get("tables", [])
+        for t in tables:
+            if t["name"] == table_name:
+                return t.get("columns", [])
+        return []
+    except Exception as e:
+        logger.error(f"SeaTable get_columns({table_name}) failed: {e}")
+        return []
+
+
+def ensure_columns(table_name: str, required_columns: list[dict]) -> dict:
+    """
+    Stellt sicher dass alle Spalten existieren. Fehlende werden angelegt.
+    required_columns: [{"column_name": "xyz", "column_type": "text"}, ...]
+
+    SeaTable column_type: text, long-text, number, checkbox, date, single-select, ...
+    """
+    existing = get_columns(table_name)
+    existing_names = {c["name"] for c in existing}
+    created = []
+    skipped = []
+
+    for col in required_columns:
+        name = col["column_name"]
+        if name in existing_names:
+            skipped.append(name)
+            continue
+        try:
+            uuid = _get_uuid()
+            url = f"{SEATABLE_BASE_URL}/api-gateway/api/v2/dtables/{uuid}/columns/"
+            resp = requests.post(
+                url,
+                headers=_headers(),
+                json={"table_name": table_name, "column_name": name, "column_type": col.get("column_type", "text")},
+                timeout=10,
+            )
+            if resp.status_code == 401:
+                invalidate_token()
+                resp = requests.post(
+                    url,
+                    headers=_headers(),
+                    json={"table_name": table_name, "column_name": name, "column_type": col.get("column_type", "text")},
+                    timeout=10,
+                )
+            resp.raise_for_status()
+            created.append(name)
+            logger.info(f"SeaTable column created: {table_name}.{name}")
+        except Exception as e:
+            logger.error(f"SeaTable ensure_columns: failed to create {table_name}.{name}: {e}")
+
+    return {"table": table_name, "created": created, "already_existed": skipped}
+
+
 def is_email_processed(provider_message_id: str) -> bool:
     """Prüft ob E-Mail bereits verarbeitet wurde"""
     rows = list_rows("processed_emails")
@@ -195,18 +256,21 @@ def log_processed_email(
     attachments_count: int = 0,
     attachments_hashes: list = None,
 ):
-    """E-Mail als verarbeitet markieren"""
+    """E-Mail als verarbeitet markieren. Fehler werden geloggt aber nicht geworfen."""
     from datetime import datetime
     import json
-    create_row("processed_emails", {
-        "provider_message_id": provider_message_id,
-        "mail_type": intent,
-        "processing_result": action,
-        "case_id": case_id or "",
-        "from_email": from_email or "",
-        "subject": subject or "",
-        "conversation_id": conversation_id or "",
-        "processed_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M"),
-        "attachments_count": attachments_count or 0,
-        "attachments_hashes": json.dumps(attachments_hashes or []),
-    })
+    try:
+        create_row("processed_emails", {
+            "provider_message_id": provider_message_id,
+            "mail_type": intent,
+            "processing_result": action,
+            "case_id": case_id or "",
+            "from_email": from_email or "",
+            "subject": subject or "",
+            "conversation_id": conversation_id or "",
+            "processed_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M"),
+            "attachments_count": attachments_count or 0,
+            "attachments_hashes": json.dumps(attachments_hashes or []),
+        })
+    except Exception as e:
+        logger.error(f"log_processed_email failed (non-fatal): {e}")
