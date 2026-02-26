@@ -2611,6 +2611,23 @@ async def clear_dry_run_log():
     return {"cleared": True, "note": "SeaTable email_test_log bitte manuell in SeaTable leeren"}
 
 
+@app.post("/admin/clear-db")
+async def admin_clear_db():
+    """Loescht ALLE Daten aus allen Tabellen. Nur fuer Development/Testing."""
+    import db_postgres as _pg
+    tables = ["email_test_log", "fin_documents", "processed_emails", "fin_cases"]
+    results = {}
+    for table in tables:
+        try:
+            with _pg._get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(f"DELETE FROM {table}")
+                    results[table] = cur.rowcount
+        except Exception as e:
+            results[table] = f"error: {e}"
+    return {"cleared": results}
+
+
 # ============================================
 # REMINDER CHECK ENDPOINT
 # ============================================
