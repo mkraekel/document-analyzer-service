@@ -342,3 +342,143 @@ async def dashboard_dismiss(req: DismissRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ──────────────────────────────────────────
+# API: Create Case from Triage
+# ──────────────────────────────────────────
+
+class CreateCaseFromTriageRequest(BaseModel):
+    provider_message_id: str
+    applicant_name: str
+    partner_email: Optional[str] = ""
+
+@router.post("/api/dashboard/create-case")
+async def dashboard_create_case(req: CreateCaseFromTriageRequest):
+    try:
+        import time
+
+        # 1. E-Mail laden
+        emails = db.search_rows("processed_emails", "provider_message_id", req.provider_message_id)
+        if not emails:
+            raise HTTPException(status_code=404, detail="E-Mail nicht gefunden")
+        email = emails[0]
+
+        # 2. Case anlegen
+        case_id = f"CASE-{int(time.time() * 1000)}"
+        conv_id = email.get("conversation_id", "")
+
+        parsed = email.get("parsed_result", {})
+        if isinstance(parsed, str):
+            try:
+                parsed = json.loads(parsed)
+            except Exception:
+                parsed = {}
+
+        facts = {}
+        for key in ["purchase_price", "loan_amount", "equity_to_use", "object_type", "usage"]:
+            if parsed.get(key) is not None:
+                facts[key] = parsed[key]
+        prop = parsed.get("property_data", {})
+        fin = parsed.get("financing_data", {})
+        if prop:
+            facts["property_data"] = prop
+        if fin:
+            facts["financing_data"] = fin
+
+        cases.create_case(
+            case_id=case_id,
+            applicant_name=req.applicant_name,
+            partner_email=req.partner_email or email.get("from_email", ""),
+            partner_phone="",
+            conversation_id=conv_id,
+            facts=facts,
+        )
+
+        # 3. E-Mail zuordnen
+        db.update_row("processed_emails", email["_id"], {
+            "processing_result": "assigned",
+            "case_id": case_id,
+        })
+
+        # 4. Readiness check
+        result = rdns.check_readiness(case_id)
+
+        return {"success": True, "case_id": case_id, "status": result.get("status")}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Create case failed: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ──────────────────────────────────────────
+# API: Update Case Fields (Facts/Answers)
+# ──────────────────────────────────────────
+
+class UpdateFieldRequest(BaseModel):
+    field: str       # z.B. "purchase_price", "applicant_name", "object_type"
+    value: str       # Wert als String (wird ggf. zu Zahl konvertiert)
+    target: str = "answers"  # "answers", "facts", "case" (top-level fields)
+
+@router.post("/api/dashboard/case/{case_id}/update-field")
+async def dashboard_update_field(case_id: str, req: UpdateFieldRequest):
+    try:
+        case = cases.load_case(case_id)
+        if not case:
+            raise HTTPException(status_code=404, detail="Case nicht gefunden")
+
+        # Wert konvertieren
+        val = req.value
+        try:
+            val = float(val)
+            if val == int(val):
+                val = int(val)
+        except (ValueError, TypeError):
+            pass
+
+        if req.target == "case":
+            # Top-level Felder (applicant_name, partner_email)
+            allowed = {"applicant_name", "partner_email"}
+            if req.field not in allowed:
+                raise HTTPException(status_code=400, detail=f"Feld {req.field} nicht erlaubt")
+            db.update_row("fin_cases", case["_id"], {req.field: str(val)})
+        elif req.target == "facts":
+            cases.save_facts(case_id, {req.field: val}, source="dashboard")
+        else:
+            cases.save_answers(case_id, {req.field: val}, actor="broker")
+
+        result = rdns.check_readiness(case_id)
+        return {"success": True, "case_id": case_id, "status": result.get("status")}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Update field failed: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ──────────────────────────────────────────
+# API: Outgoing Emails (Notifications Log)
+# ──────────────────────────────────────────
+
+@router.get("/api/dashboard/outgoing-emails")
+async def dashboard_outgoing_emails(case_id: Optional[str] = None):
+    try:
+        all_logs = db.list_rows("email_test_log")
+        items = []
+        for e in all_logs:
+            subj = e.get("subject", "")
+            # Filter by case_id if provided
+            if case_id and case_id not in subj:
+                continue
+            items.append({
+                "to": e.get("to"),
+                "subject": subj,
+                "body_text": (e.get("body_text") or "")[:500],
+                "body_html": (e.get("body_html") or "")[:1000],
+                "logged_at": e.get("logged_at"),
+                "dry_run": e.get("dry_run", True),
+            })
+        return {"emails": items}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

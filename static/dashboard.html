@@ -13,9 +13,17 @@
   .badge-red { background: #fee2e2; color: #991b1b; }
   .badge-blue { background: #dbeafe; color: #1e40af; }
   .badge-gray { background: #f3f4f6; color: #374151; }
+  .badge-purple { background: #f3e8ff; color: #6b21a8; }
   pre.json { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; font-size: 0.8rem; overflow-x: auto; max-height: 300px; }
   .card { background: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 20px; }
   .toast { position: fixed; bottom: 20px; right: 20px; padding: 12px 24px; border-radius: 8px; color: white; z-index: 999; transition: opacity 0.3s; }
+  .edit-field { border: 1px solid #e2e8f0; border-radius: 6px; padding: 4px 8px; font-size: 0.875rem; width: 100%; }
+  .edit-field:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,0.2); }
+  .field-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #f1f5f9; }
+  .field-row:last-child { border-bottom: none; }
+  .field-label { min-width: 180px; font-size: 0.8rem; color: #64748b; font-weight: 500; }
+  .field-value { flex: 1; font-size: 0.875rem; }
+  .btn-sm { padding: 2px 10px; border-radius: 6px; font-size: 0.75rem; cursor: pointer; }
 </style>
 </head>
 <body class="bg-gray-50 min-h-screen">
@@ -30,6 +38,7 @@
     <button onclick="showTab('overview')" id="tab-overview" class="py-3 text-sm tab-active">Uebersicht</button>
     <button onclick="showTab('triage')" id="tab-triage" class="py-3 text-sm text-gray-500 hover:text-gray-800">Triage <span id="triage-badge" class="badge badge-red hidden">0</span></button>
     <button onclick="showTab('cases')" id="tab-cases" class="py-3 text-sm text-gray-500 hover:text-gray-800">Cases</button>
+    <button onclick="showTab('outgoing')" id="tab-outgoing" class="py-3 text-sm text-gray-500 hover:text-gray-800">Ausgehende Mails</button>
   </div>
 </header>
 
@@ -56,6 +65,12 @@
     <div id="cases-list" class="space-y-4"></div>
   </div>
 
+  <!-- Outgoing Mails Tab -->
+  <div id="panel-outgoing" class="hidden">
+    <div id="outgoing-list" class="space-y-4"></div>
+    <p id="outgoing-empty" class="text-gray-400 text-center py-12 hidden">Keine ausgehenden E-Mails.</p>
+  </div>
+
   <!-- Case Detail (shown inline) -->
   <div id="panel-detail" class="hidden">
     <button onclick="showTab('cases')" class="text-blue-600 hover:underline mb-4 inline-block">&larr; Zurueck</button>
@@ -70,10 +85,11 @@
 <script>
 const API = '';
 let allCases = [];
+let currentCaseId = null;
 
 // ── Tabs ──
 function showTab(tab) {
-  ['overview','triage','cases','detail'].forEach(t => {
+  ['overview','triage','cases','detail','outgoing'].forEach(t => {
     document.getElementById('panel-'+t).classList.toggle('hidden', t !== tab);
     const btn = document.getElementById('tab-'+t);
     if (btn) {
@@ -81,6 +97,7 @@ function showTab(tab) {
       btn.classList.toggle('text-gray-500', t !== tab);
     }
   });
+  if (tab === 'outgoing') loadOutgoing();
 }
 
 // ── Toast ──
@@ -155,7 +172,12 @@ async function loadTriage() {
 
   const caseOpts = allCases.map(c => `<option value="${c.case_id}">${c.case_id} - ${c.applicant_name}</option>`).join('');
 
-  list.innerHTML = d.triage.map(e => `
+  list.innerHTML = d.triage.map(e => {
+    const parsed = e.parsed_result || {};
+    const nameGuess = [parsed.applicant_firstName, parsed.applicant_lastName].filter(Boolean).join(' ') || '';
+    const emailGuess = parsed.partner_email || e.from_email || '';
+
+    return `
     <div class="card">
       <div class="flex justify-between items-start mb-2">
         <div>
@@ -166,19 +188,25 @@ async function loadTriage() {
       </div>
       <div class="font-medium mb-1">${esc(e.subject)}</div>
       <div class="text-sm text-gray-600 mb-3 whitespace-pre-line">${esc(e.body_text)}</div>
-      ${e.parsed_result && Object.keys(e.parsed_result).length > 0
-        ? `<details class="mb-3"><summary class="text-xs text-gray-400 cursor-pointer">GPT Parsing</summary><pre class="json">${esc(JSON.stringify(e.parsed_result, null, 2))}</pre></details>`
+      ${parsed && Object.keys(parsed).length > 0
+        ? `<details class="mb-3"><summary class="text-xs text-gray-400 cursor-pointer">GPT Parsing</summary><pre class="json">${esc(JSON.stringify(parsed, null, 2))}</pre></details>`
         : ''}
-      <div class="flex gap-2 items-center flex-wrap">
+      <div class="flex gap-2 items-center flex-wrap mb-2">
         <select id="assign-${e.provider_message_id}" class="border rounded px-2 py-1 text-sm">
-          <option value="">Case auswaehlen...</option>
+          <option value="">Bestehendem Case zuordnen...</option>
           ${caseOpts}
         </select>
         <button onclick="assignEmail('${e.provider_message_id}')" class="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700">Zuordnen</button>
         <button onclick="dismissEmail('${e.provider_message_id}')" class="bg-gray-200 text-gray-700 px-3 py-1 rounded text-sm hover:bg-gray-300">Ignorieren</button>
       </div>
+      <div class="flex gap-2 items-center flex-wrap border-t pt-2">
+        <span class="text-xs text-gray-400">Neuen Case:</span>
+        <input id="newcase-name-${e.provider_message_id}" type="text" value="${esc(nameGuess)}" placeholder="Name" class="border rounded px-2 py-1 text-sm w-40">
+        <input id="newcase-email-${e.provider_message_id}" type="text" value="${esc(emailGuess)}" placeholder="E-Mail" class="border rounded px-2 py-1 text-sm w-48">
+        <button onclick="createCaseFromTriage('${e.provider_message_id}')" class="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700">+ Neuen Case anlegen</button>
+      </div>
     </div>
-  `).join('');
+  `}).join('');
 }
 
 async function assignEmail(msgId) {
@@ -191,12 +219,55 @@ async function assignEmail(msgId) {
   } catch(e) { toast('Fehler: ' + e.message, false); }
 }
 
+async function createCaseFromTriage(msgId) {
+  const name = document.getElementById('newcase-name-' + msgId).value.trim();
+  const email = document.getElementById('newcase-email-' + msgId).value.trim();
+  if (!name) { toast('Bitte Name eingeben', false); return; }
+  try {
+    const r = await api('/api/dashboard/create-case', 'POST', {
+      provider_message_id: msgId, applicant_name: name, partner_email: email
+    });
+    toast(`Case ${r.case_id} angelegt`);
+    loadAll();
+  } catch(e) { toast('Fehler: ' + e.message, false); }
+}
+
 async function dismissEmail(msgId) {
   try {
     await api('/api/dashboard/dismiss', 'POST', { provider_message_id: msgId });
     toast('E-Mail ignoriert');
     loadAll();
   } catch(e) { toast('Fehler: ' + e.message, false); }
+}
+
+// ── Outgoing Mails ──
+async function loadOutgoing() {
+  try {
+    const d = await api('/api/dashboard/outgoing-emails');
+    const list = document.getElementById('outgoing-list');
+    const empty = document.getElementById('outgoing-empty');
+    if (!d.emails || d.emails.length === 0) {
+      list.innerHTML = '';
+      empty.classList.remove('hidden');
+      return;
+    }
+    empty.classList.add('hidden');
+    list.innerHTML = d.emails.map(e => `
+      <div class="card">
+        <div class="flex justify-between items-start mb-2">
+          <div>
+            <span class="text-gray-400 text-sm">An:</span> <span class="font-semibold">${esc(e.to)}</span>
+            <span class="text-gray-400 text-sm ml-3">${e.logged_at || ''}</span>
+          </div>
+          ${e.dry_run ? '<span class="badge badge-purple">DRY-RUN</span>' : '<span class="badge badge-green">GESENDET</span>'}
+        </div>
+        <div class="font-medium mb-2">${esc(e.subject)}</div>
+        <div class="text-sm text-gray-600 whitespace-pre-line">${esc(e.body_text)}</div>
+      </div>
+    `).join('');
+  } catch(e) {
+    document.getElementById('outgoing-list').innerHTML = `<div class="text-red-500">Fehler: ${esc(e.message)}</div>`;
+  }
 }
 
 // ── Cases ──
@@ -223,13 +294,80 @@ async function loadCases() {
   `).join('') || '<p class="text-gray-400 text-center py-12">Keine Cases vorhanden.</p>';
 }
 
+// ── Editable Field ──
+function editableField(caseId, field, value, target='answers', label=null) {
+  const displayVal = value !== null && value !== undefined && value !== '' ? String(value) : '-';
+  const id = `ef-${field}-${caseId}`;
+  return `
+    <div class="field-row">
+      <div class="field-label">${label || field}</div>
+      <div class="field-value" id="display-${id}" onclick="startEdit('${id}','${esc(displayVal)}')"
+           class="cursor-pointer hover:bg-blue-50 rounded px-1" title="Klicken zum Bearbeiten">
+        ${displayVal === '-' ? '<span class="text-gray-300">-</span>' : esc(displayVal)}
+        <span class="text-gray-300 text-xs ml-1">&#9998;</span>
+      </div>
+      <div id="edit-${id}" class="hidden flex gap-1 flex-1">
+        <input id="input-${id}" type="text" value="${esc(displayVal === '-' ? '' : displayVal)}" class="edit-field"
+               onkeydown="if(event.key==='Enter')saveField('${caseId}','${field}','${id}','${target}');if(event.key==='Escape')cancelEdit('${id}')">
+        <button onclick="saveField('${caseId}','${field}','${id}','${target}')" class="btn-sm bg-blue-600 text-white hover:bg-blue-700">OK</button>
+        <button onclick="cancelEdit('${id}')" class="btn-sm bg-gray-200 text-gray-600 hover:bg-gray-300">X</button>
+      </div>
+    </div>
+  `;
+}
+
+function startEdit(id, currentVal) {
+  document.getElementById('display-' + id).classList.add('hidden');
+  document.getElementById('edit-' + id).classList.remove('hidden');
+  const inp = document.getElementById('input-' + id);
+  inp.focus();
+  inp.select();
+}
+
+function cancelEdit(id) {
+  document.getElementById('display-' + id).classList.remove('hidden');
+  document.getElementById('edit-' + id).classList.add('hidden');
+}
+
+async function saveField(caseId, field, id, target) {
+  const val = document.getElementById('input-' + id).value;
+  try {
+    const r = await api(`/api/dashboard/case/${caseId}/update-field`, 'POST', { field, value: val, target });
+    toast(`${field} gespeichert`);
+    cancelEdit(id);
+    openCase(caseId);
+  } catch(e) { toast('Fehler: ' + e.message, false); }
+}
+
+// ── Helper: flatten nested object ──
+function flattenObj(obj, prefix='') {
+  const out = {};
+  for (const [k, v] of Object.entries(obj || {})) {
+    const key = prefix ? `${prefix}.${k}` : k;
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      Object.assign(out, flattenObj(v, key));
+    } else {
+      out[key] = v;
+    }
+  }
+  return out;
+}
+
 // ── Case Detail ──
 async function openCase(caseId) {
+  currentCaseId = caseId;
   showTab('detail');
   document.getElementById('detail-content').innerHTML = '<p class="text-gray-400">Laden...</p>';
   try {
     const c = await api('/api/dashboard/case/' + caseId);
     const readiness = c.readiness || {};
+    const flatFacts = flattenObj(c.facts_extracted);
+    const flatAnswers = flattenObj(c.answers_user);
+    const flatOverrides = flattenObj(c.manual_overrides);
+
+    // Key financing fields for quick edit
+    const keyFields = ['purchase_price', 'loan_amount', 'equity_to_use', 'object_type', 'usage'];
+    const effectiveView = {...flatFacts, ...flatAnswers, ...flatOverrides};
 
     document.getElementById('detail-content').innerHTML = `
       <div class="card mb-4">
@@ -240,8 +378,11 @@ async function openCase(caseId) {
           </div>
           ${statusBadge(c.status)}
         </div>
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-          <div><span class="text-gray-400">Partner</span><br>${esc(c.partner_email)}</div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-0 text-sm">
+          ${editableField(caseId, 'applicant_name', c.applicant_name, 'case', 'Name')}
+          ${editableField(caseId, 'partner_email', c.partner_email, 'case', 'Partner E-Mail')}
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm mt-3 pt-3 border-t">
           <div><span class="text-gray-400">Letzte Aenderung</span><br>${c.last_status_change ? c.last_status_change.substring(0,16) : '-'}</div>
           <div><span class="text-gray-400">OneDrive</span><br>${c.onedrive_folder_id ? 'Vorhanden' : 'Kein Ordner'}</div>
           <div><span class="text-gray-400">Conversations</span><br>${(c.conversation_ids || []).length}</div>
@@ -257,7 +398,8 @@ async function openCase(caseId) {
           <button onclick="caseAction('${caseId}','RECHECK')" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">Recheck</button>
         </div>
         <div class="mt-3 flex gap-2 items-center">
-          <input id="override-key" type="text" placeholder="Override Key (z.B. accept_stale_kontoauszug)" class="border rounded px-2 py-1 text-sm flex-1">
+          <input id="override-key" type="text" placeholder="Override Key (z.B. accept_missing_renteninfo)" class="border rounded px-2 py-1 text-sm flex-1">
+          <input id="override-val" type="text" placeholder="Wert" value="true" class="border rounded px-2 py-1 text-sm w-24">
           <button onclick="setOverride('${caseId}')" class="bg-purple-600 text-white px-3 py-1 rounded text-sm hover:bg-purple-700">Override setzen</button>
         </div>
       </div>
@@ -270,19 +412,27 @@ async function openCase(caseId) {
         ${readiness.missing_broker && readiness.missing_broker.length > 0
           ? `<div class="mb-2"><span class="text-red-500 font-medium">Fehlende Broker-Daten:</span> ${readiness.missing_broker.join(', ')}</div>` : ''}
         ${readiness.missing_docs && readiness.missing_docs.length > 0
-          ? `<div class="mb-2"><span class="text-yellow-600 font-medium">Fehlende Dokumente:</span><ul class="ml-4 text-sm">${readiness.missing_docs.map(d => `<li>${d.type} (${d.found}/${d.required})</li>`).join('')}</ul></div>` : ''}
+          ? `<div class="mb-2"><span class="text-yellow-600 font-medium">Fehlende Dokumente:</span><ul class="ml-4 text-sm">${readiness.missing_docs.map(d => `<li>${typeof d === 'object' ? d.type + ' (' + d.found + '/' + d.required + ')' : d}</li>`).join('')}</ul></div>` : ''}
         ${readiness.stale_docs && readiness.stale_docs.length > 0
-          ? `<div class="mb-2"><span class="text-orange-500 font-medium">Veraltete Dokumente:</span> ${readiness.stale_docs.map(d => d.type).join(', ')}</div>` : ''}
+          ? `<div class="mb-2"><span class="text-orange-500 font-medium">Veraltete Dokumente:</span> ${readiness.stale_docs.map(d => typeof d === 'object' ? d.type : d).join(', ')}</div>` : ''}
         ${readiness.manual_overrides_applied && readiness.manual_overrides_applied.length > 0
           ? `<div class="mb-2"><span class="text-purple-600 font-medium">Overrides:</span> ${readiness.manual_overrides_applied.join(', ')}</div>` : ''}
         ${readiness.is_complete ? '<div class="text-green-600 font-bold mt-2">Case ist vollstaendig!</div>' : ''}
       </div>
 
-      <!-- Facts -->
+      <!-- Finanzierungsdaten (editierbar) -->
+      <div class="card mb-4">
+        <h3 class="font-semibold mb-3">Finanzierungsdaten</h3>
+        ${keyFields.map(f => editableField(caseId, f, effectiveView[f] || effectiveView['property_data.'+f] || effectiveView['financing_data.'+f], 'answers', f.replace(/_/g, ' '))).join('')}
+      </div>
+
+      <!-- Alle Facts (editierbar) -->
       <div class="card mb-4">
         <details>
-          <summary class="font-semibold cursor-pointer">Facts Extracted</summary>
-          <pre class="json mt-2">${esc(JSON.stringify(c.facts_extracted, null, 2))}</pre>
+          <summary class="font-semibold cursor-pointer">Alle extrahierten Daten (${Object.keys(flatFacts).length} Felder)</summary>
+          <div class="mt-2">
+            ${Object.entries(flatFacts).map(([k,v]) => editableField(caseId, k, v, 'facts')).join('')}
+          </div>
         </details>
       </div>
 
@@ -290,13 +440,17 @@ async function openCase(caseId) {
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
         <div class="card">
           <details>
-            <summary class="font-semibold cursor-pointer">Answers</summary>
-            <pre class="json mt-2">${esc(JSON.stringify(c.answers_user, null, 2))}</pre>
+            <summary class="font-semibold cursor-pointer">Answers (${Object.keys(flatAnswers).length})</summary>
+            <div class="mt-2">
+              ${Object.keys(flatAnswers).length > 0
+                ? Object.entries(flatAnswers).map(([k,v]) => editableField(caseId, k, v, 'answers')).join('')
+                : '<span class="text-gray-400 text-sm">Keine Answers</span>'}
+            </div>
           </details>
         </div>
         <div class="card">
           <details>
-            <summary class="font-semibold cursor-pointer">Manual Overrides</summary>
+            <summary class="font-semibold cursor-pointer">Manual Overrides (${Object.keys(flatOverrides).length})</summary>
             <pre class="json mt-2">${esc(JSON.stringify(c.manual_overrides, null, 2))}</pre>
           </details>
         </div>
@@ -317,9 +471,9 @@ async function openCase(caseId) {
         ` : '<p class="text-gray-400 text-sm">Keine Dokumente vorhanden.</p>'}
       </div>
 
-      <!-- E-Mails -->
+      <!-- Incoming E-Mails -->
       <div class="card mb-4">
-        <h3 class="font-semibold mb-3">Zugeordnete E-Mails (${c.emails.length})</h3>
+        <h3 class="font-semibold mb-3">Eingehende E-Mails (${c.emails.length})</h3>
         ${c.emails.map(e => `
           <div class="border-t py-2 flex justify-between items-center">
             <div>
@@ -327,11 +481,17 @@ async function openCase(caseId) {
               <span class="text-gray-400 text-xs ml-2">${esc(e.from_email)}</span>
             </div>
             <div class="flex gap-2 items-center">
-              <span class="badge badge-gray">${e.mail_type}</span>
+              ${e.matched_by ? `<span class="badge badge-gray">${e.matched_by}</span>` : ''}
               <span class="badge ${e.processing_result==='create'?'badge-green':e.processing_result==='update'?'badge-blue':'badge-gray'}">${e.processing_result}</span>
             </div>
           </div>
         `).join('')}
+      </div>
+
+      <!-- Outgoing Notifications for this case -->
+      <div class="card mb-4" id="case-outgoing">
+        <h3 class="font-semibold mb-3">Ausgehende Benachrichtigungen</h3>
+        <p class="text-gray-400 text-sm">Laden...</p>
       </div>
 
       <!-- Audit Log -->
@@ -342,22 +502,57 @@ async function openCase(caseId) {
             ${(c.audit_log || []).reverse().map(a => `
               <div class="flex gap-3 text-gray-600">
                 <span class="text-gray-400 font-mono text-xs">${(a.ts||'').substring(0,16)}</span>
-                <span>${esc(a.event)}${a.status ? ' → '+a.status : ''}${a.source ? ' ('+a.source+')' : ''}</span>
+                <span>${esc(a.event)}${a.status ? ' &rarr; '+a.status : ''}${a.source ? ' ('+a.source+')' : ''}${a.actor ? ' ['+a.actor+']' : ''}</span>
               </div>
             `).join('')}
           </div>
         </details>
       </div>
     `;
+
+    // Load outgoing emails for this case
+    loadCaseOutgoing(caseId);
+
   } catch(e) {
     document.getElementById('detail-content').innerHTML = `<div class="text-red-500">Fehler: ${esc(e.message)}</div>`;
+  }
+}
+
+async function loadCaseOutgoing(caseId) {
+  try {
+    const d = await api('/api/dashboard/outgoing-emails?case_id=' + caseId);
+    const container = document.getElementById('case-outgoing');
+    if (!d.emails || d.emails.length === 0) {
+      container.innerHTML = `<h3 class="font-semibold mb-3">Ausgehende Benachrichtigungen</h3><p class="text-gray-400 text-sm">Keine Benachrichtigungen gesendet.</p>`;
+      return;
+    }
+    container.innerHTML = `
+      <h3 class="font-semibold mb-3">Ausgehende Benachrichtigungen (${d.emails.length})</h3>
+      ${d.emails.map(e => `
+        <div class="border-t py-2">
+          <div class="flex justify-between items-center mb-1">
+            <div>
+              <span class="text-gray-400 text-xs">An:</span> <span class="text-sm font-medium">${esc(e.to)}</span>
+              <span class="text-gray-400 text-xs ml-2">${e.logged_at || ''}</span>
+            </div>
+            ${e.dry_run ? '<span class="badge badge-purple">DRY-RUN</span>' : '<span class="badge badge-green">GESENDET</span>'}
+          </div>
+          <div class="text-sm font-medium">${esc(e.subject)}</div>
+          <details><summary class="text-xs text-gray-400 cursor-pointer">Inhalt anzeigen</summary>
+            <div class="text-xs text-gray-600 mt-1 whitespace-pre-line">${esc(e.body_text)}</div>
+          </details>
+        </div>
+      `).join('')}
+    `;
+  } catch(e) {
+    document.getElementById('case-outgoing').innerHTML = `<h3 class="font-semibold mb-3">Ausgehende Benachrichtigungen</h3><p class="text-red-500 text-sm">Fehler: ${esc(e.message)}</p>`;
   }
 }
 
 async function caseAction(caseId, action) {
   try {
     const r = await api('/api/dashboard/case/' + caseId + '/action', 'POST', { action });
-    toast(`${action} → ${r.status}`);
+    toast(`${action} - ${r.status}`);
     openCase(caseId);
     loadStats();
   } catch(e) { toast('Fehler: ' + e.message, false); }
@@ -365,16 +560,18 @@ async function caseAction(caseId, action) {
 
 async function setOverride(caseId) {
   const key = document.getElementById('override-key').value.trim();
+  const val = document.getElementById('override-val').value.trim() || 'true';
   if (!key) { toast('Bitte Override Key eingeben', false); return; }
   try {
-    const r = await api('/api/dashboard/case/' + caseId + '/override', 'POST', { key, value: 'true' });
-    toast(`Override ${key} gesetzt → ${r.status}`);
+    const r = await api('/api/dashboard/case/' + caseId + '/override', 'POST', { key, value: val });
+    toast(`Override ${key} gesetzt - ${r.status}`);
     document.getElementById('override-key').value = '';
+    document.getElementById('override-val').value = 'true';
     openCase(caseId);
   } catch(e) { toast('Fehler: ' + e.message, false); }
 }
 
-function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = String(s); return d.innerHTML; }
 
 // Init
 loadAll();
