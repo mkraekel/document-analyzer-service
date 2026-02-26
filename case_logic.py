@@ -51,6 +51,9 @@ def gatekeeper(from_email: str, subject: str, conversation_id: str = None) -> di
         is_reply = bool(REPLY_PATTERN.match(subject)) or bool(conversation_id)
         if is_reply:
             return {"pass": True, "reason": None, "actor": "broker", "is_internal_reply": True}
+        # Neue interne Mail mit Finanz-Keyword → Broker leitet Anfrage weiter
+        if FINANCE_HINT.search(subject):
+            return {"pass": True, "reason": None, "actor": "broker", "is_internal_reply": False}
         return {"pass": False, "reason": "outgoing_system_mail", "actor": None, "is_internal_reply": False}
 
     # Externe Allowlist
