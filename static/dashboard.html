@@ -417,7 +417,9 @@ async function openCase(caseId) {
         </div>
         <div class="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm mt-3 pt-3 border-t">
           <div><span class="text-gray-400">Letzte Aenderung</span><br>${c.last_status_change ? c.last_status_change.substring(0,16) : '-'}</div>
-          <div><span class="text-gray-400">OneDrive</span><br>${c.onedrive_folder_id ? 'Vorhanden' : 'Kein Ordner'}</div>
+          <div><span class="text-gray-400">OneDrive</span><br>${c.onedrive_web_url
+            ? `<a href="${esc(c.onedrive_web_url)}" target="_blank" class="text-blue-600 hover:underline">Ordner oeffnen ↗</a>`
+            : c.onedrive_folder_id ? '<span class="text-green-600">Vorhanden</span>' : '<span class="text-gray-400">Kein Ordner</span>'}</div>
           <div><span class="text-gray-400">Conversations</span><br>${(c.conversation_ids || []).length}</div>
         </div>
       </div>
@@ -548,7 +550,17 @@ async function openCase(caseId) {
 
       <!-- Documents -->
       <div class="card mb-4">
-        <h3 class="font-semibold mb-3">Dokumente (${c.documents.length})</h3>
+        <div class="flex justify-between items-center mb-3">
+          <h3 class="font-semibold">Dokumente (${c.documents.length})</h3>
+          <div class="flex gap-2">
+            ${c.onedrive_web_url
+              ? `<a href="${esc(c.onedrive_web_url)}" target="_blank" class="text-xs bg-blue-50 text-blue-600 hover:bg-blue-100 px-3 py-1 rounded border border-blue-200">OneDrive oeffnen ↗</a>`
+              : c.onedrive_folder_id ? '<span class="text-xs text-green-600 px-3 py-1">OneDrive vorhanden</span>' : ''}
+            ${c.onedrive_folder_id
+              ? `<button onclick="scanDocuments('${caseId}')" class="text-xs bg-purple-50 text-purple-600 hover:bg-purple-100 px-3 py-1 rounded border border-purple-200">Dokumente scannen</button>`
+              : ''}
+          </div>
+        </div>
         ${c.documents.length > 0 ? `
           <table class="w-full text-sm">
             <thead><tr class="text-left text-gray-400"><th>Datei</th><th>Typ</th><th>Status</th><th>Datum</th></tr></thead>
@@ -558,7 +570,7 @@ async function openCase(caseId) {
               <td class="text-gray-400">${d.processed_at || ''}</td></tr>
             `).join('')}</tbody>
           </table>
-        ` : '<p class="text-gray-400 text-sm">Keine Dokumente vorhanden.</p>'}
+        ` : '<p class="text-gray-400 text-sm">Keine Dokumente vorhanden. Dateien im OneDrive-Ordner ablegen und "Dokumente scannen" klicken.</p>'}
       </div>
 
       <!-- Incoming E-Mails -->
@@ -732,6 +744,19 @@ async function setOverride(caseId) {
     toast(`Override ${key} gesetzt - ${r.status}`);
     document.getElementById('override-key').value = '';
     document.getElementById('override-val').value = 'true';
+    openCase(caseId);
+  } catch(e) { toast('Fehler: ' + e.message, false); }
+}
+
+async function scanDocuments(caseId) {
+  toast('Dokumente werden gescannt...', true);
+  try {
+    const r = await api(`/api/dashboard/case/${caseId}/scan-documents`, 'POST');
+    if (r.scanned > 0) {
+      toast(`${r.scanned} neue Dokumente analysiert`);
+    } else {
+      toast(r.message || 'Keine neuen Dokumente gefunden');
+    }
     openCase(caseId);
   } catch(e) { toast('Fehler: ' + e.message, false); }
 }

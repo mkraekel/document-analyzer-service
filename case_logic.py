@@ -299,12 +299,15 @@ def update_status(case_id: str, status: str, readiness: dict = None, _cached_cas
     db.update_row("fin_cases", case["_id"], update_data)
 
 
-def update_onedrive_folder(case_id: str, folder_id: str):
-    """OneDrive Folder ID speichern (direkter Update via case_id)"""
+def update_onedrive_folder(case_id: str, folder_id: str, web_url: str = None):
+    """OneDrive Folder ID + optional Web URL speichern"""
     rows = db.search_rows("fin_cases", "case_id", case_id)
     if not rows:
         return
-    db.update_row("fin_cases", rows[0]["_id"], {"onedrive_folder_id": folder_id})
+    update = {"onedrive_folder_id": folder_id}
+    if web_url:
+        update["onedrive_web_url"] = web_url
+    db.update_row("fin_cases", rows[0]["_id"], update)
 
 
 def build_docs_index(case_id: str) -> dict:

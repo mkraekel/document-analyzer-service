@@ -2458,13 +2458,14 @@ async def full_readiness_check(request: FullReadinessRequest):
 class UpdateOneDriveFolderRequest(BaseModel):
     case_id: str
     onedrive_folder_id: str
+    web_url: Optional[str] = None
 
 @app.post("/update-onedrive-folder")
 async def update_onedrive_folder(request: UpdateOneDriveFolderRequest):
     """n8n meldet erstellten OneDrive-Ordner zurück.
     Kein Notification-Dispatch hier – n8n ruft danach /full-readiness-check auf."""
     try:
-        cases.update_onedrive_folder(request.case_id, request.onedrive_folder_id)
+        cases.update_onedrive_folder(request.case_id, request.onedrive_folder_id, web_url=request.web_url)
         # Nur Status prüfen, KEINE Notification (verhindert Doppel-Notification)
         result = rdns.check_readiness(request.case_id)
         return {"success": True, "case_id": request.case_id, "status": result["status"]}

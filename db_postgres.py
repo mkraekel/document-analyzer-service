@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS fin_cases (
     readiness JSONB DEFAULT '{}'::jsonb,
     audit_log JSONB DEFAULT '[]'::jsonb,
     onedrive_folder_id TEXT DEFAULT '',
+    onedrive_web_url TEXT DEFAULT '',
     last_status_change TEXT DEFAULT '',
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -144,14 +145,20 @@ CREATE TABLE IF NOT EXISTS email_test_log (
 """
 
 
+_MIGRATIONS_SQL = """
+ALTER TABLE fin_cases ADD COLUMN IF NOT EXISTS onedrive_web_url TEXT DEFAULT '';
+"""
+
+
 def _init_tables():
-    """Create all tables if they don't exist."""
+    """Create all tables if they don't exist, then run migrations."""
     pool = _get_pool.__wrapped__() if hasattr(_get_pool, '__wrapped__') else None
     # We already have _pool set at this point
     conn = _pool.getconn()
     try:
         with conn.cursor() as cur:
             cur.execute(_SCHEMA_SQL)
+            cur.execute(_MIGRATIONS_SQL)
         conn.commit()
         logger.info("PostgreSQL tables initialized")
     except Exception as e:

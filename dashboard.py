@@ -5,7 +5,9 @@ Endpoints fuer Triage, Case-Management, Overrides
 
 import json
 import logging
+import os
 import traceback
+import httpx
 from datetime import datetime
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import HTMLResponse
@@ -15,6 +17,8 @@ from typing import Optional
 import seatable as db
 import case_logic as cases
 import readiness as rdns
+
+N8N_SCAN_WEBHOOK = os.getenv("N8N_SCAN_WEBHOOK", "")
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -186,6 +190,7 @@ async def dashboard_case_detail(case_id: str):
             "partner_email": case.get("partner_email"),
             "status": case.get("status"),
             "onedrive_folder_id": case.get("onedrive_folder_id", ""),
+            "onedrive_web_url": case.get("onedrive_web_url", ""),
             "last_status_change": case.get("last_status_change"),
             "conversation_ids": conv_ids,
             "facts_extracted": facts,
@@ -454,6 +459,65 @@ async def dashboard_update_field(case_id: str, req: UpdateFieldRequest):
         raise
     except Exception as e:
         logger.error(f"Update field failed: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ──────────────────────────────────────────
+# API: Check if OneDrive file is already processed
+# ──────────────────────────────────────────
+
+class CheckFileRequest(BaseModel):
+    case_id: str
+    onedrive_file_id: str
+
+@router.post("/api/dashboard/check-file-processed")
+async def check_file_processed(req: CheckFileRequest):
+    """Prüft ob eine OneDrive-Datei bereits analysiert wurde."""
+    try:
+        docs = db.search_rows("fin_documents", "caseId", req.case_id)
+        for d in docs:
+            if d.get("onedrive_file_id") == req.onedrive_file_id:
+                return {"already_processed": True, "doc_type": d.get("doc_type")}
+        return {"already_processed": False}
+    except Exception as e:
+        logger.error(f"check-file-processed failed: {e}")
+        return {"already_processed": False}
+
+
+# ──────────────────────────────────────────
+# API: Scan Documents (triggers n8n OneDrive scan)
+# ──────────────────────────────────────────
+
+@router.post("/api/dashboard/case/{case_id}/scan-documents")
+async def dashboard_scan_documents(case_id: str):
+    """Triggert n8n Webhook zum Scannen des OneDrive-Ordners."""
+    try:
+        case = cases.load_case(case_id)
+        if not case:
+            raise HTTPException(status_code=404, detail="Case nicht gefunden")
+
+        folder_id = case.get("onedrive_folder_id")
+        if not folder_id:
+            raise HTTPException(status_code=400, detail="Kein OneDrive-Ordner vorhanden")
+
+        if not N8N_SCAN_WEBHOOK:
+            raise HTTPException(status_code=503, detail="N8N_SCAN_WEBHOOK nicht konfiguriert")
+
+        # n8n Webhook aufrufen – n8n listet Dateien und ruft /process-document pro Datei
+        async with httpx.AsyncClient(timeout=120) as client:
+            resp = await client.post(N8N_SCAN_WEBHOOK, json={
+                "case_id": case_id,
+                "onedrive_folder_id": folder_id,
+            })
+            resp.raise_for_status()
+            result = resp.json()
+
+        scanned = result.get("scanned", 0)
+        return {"success": True, "case_id": case_id, "scanned": scanned, "message": result.get("message", "")}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Scan documents failed: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
