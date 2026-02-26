@@ -110,6 +110,9 @@ CREATE TABLE IF NOT EXISTS processed_emails (
     from_email TEXT DEFAULT '',
     subject TEXT DEFAULT '',
     conversation_id TEXT DEFAULT '',
+    body_text TEXT DEFAULT '',
+    parsed_result JSONB DEFAULT '{}'::jsonb,
+    matched_by TEXT DEFAULT '',
     processed_at TEXT DEFAULT '',
     attachments_count INTEGER DEFAULT 0,
     attachments_hashes JSONB DEFAULT '[]'::jsonb,
@@ -376,6 +379,9 @@ def log_processed_email(
     conversation_id: str = None,
     attachments_count: int = 0,
     attachments_hashes: list = None,
+    body_text: str = None,
+    parsed_result: dict = None,
+    matched_by: str = None,
 ):
     """Log email as processed. Upserts on provider_message_id. Errors are non-fatal."""
     try:
@@ -383,22 +389,27 @@ def log_processed_email(
         now = datetime.utcnow().strftime("%Y-%m-%d %H:%M")
         with _get_conn() as conn:
             with conn.cursor() as cur:
-                # Upsert: if a lock entry exists, overwrite it with the final result
                 cur.execute("""
                     INSERT INTO processed_emails
                         (_id, provider_message_id, mail_type, processing_result, case_id,
-                         from_email, subject, conversation_id, processed_at,
+                         from_email, subject, conversation_id, body_text,
+                         parsed_result, matched_by, processed_at,
                          attachments_count, attachments_hashes)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (provider_message_id) DO UPDATE SET
                         mail_type = EXCLUDED.mail_type,
                         processing_result = EXCLUDED.processing_result,
                         case_id = EXCLUDED.case_id,
+                        body_text = EXCLUDED.body_text,
+                        parsed_result = EXCLUDED.parsed_result,
+                        matched_by = EXCLUDED.matched_by,
                         processed_at = EXCLUDED.processed_at
                 """, (
                     _new_id(), provider_message_id, intent, action,
                     case_id or "", from_email or "", subject or "",
-                    conversation_id or "", now,
+                    conversation_id or "", (body_text or "")[:5000],
+                    psycopg2.extras.Json(parsed_result or {}),
+                    matched_by or "", now,
                     attachments_count or 0, psycopg2.extras.Json(json.loads(hashes)),
                 ))
     except Exception as e:

@@ -2002,15 +2002,18 @@ async def _process_email_impl(request: ProcessEmailRequest):
     # 2. Gatekeeper
     gate = cases.gatekeeper(request.from_email, request.subject, request.conversation_id)
     _att_filenames = list((request.attachments or {}).keys())
+    _body_short = (request.body_text or "")[:5000]
     _log_kwargs = dict(
         from_email=request.from_email,
         subject=request.subject,
         conversation_id=request.conversation_id,
         attachments_count=len(_att_filenames),
         attachments_hashes=_att_filenames,
+        body_text=_body_short,
     )
     if not gate["pass"]:
-        db.log_processed_email(request.provider_message_id, "skipped", gate["reason"], **_log_kwargs)
+        db.log_processed_email(request.provider_message_id, "skipped", gate["reason"],
+                               parsed_result={"gate": gate}, **_log_kwargs)
         return ProcessEmailResponse(action="skipped", reason=gate["reason"])
 
     # 3. KI-Parsing über bestehenden parse-email Logic
@@ -2069,7 +2072,8 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
         parsed.get("applicant_lastName")
     )
     if not is_relevant:
-        db.log_processed_email(request.provider_message_id, "not_relevant", "irrelevant", **_log_kwargs)
+        db.log_processed_email(request.provider_message_id, "not_relevant", "irrelevant",
+                               parsed_result=parsed, **_log_kwargs)
         return ProcessEmailResponse(action="skipped", reason="not_relevant")
 
     # 4. Case Matching
@@ -2134,7 +2138,8 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
             cases.save_answers(case_id, {}, actor=gate["actor"], overrides=overrides)
 
     elif match["action"] == "triage":
-        db.log_processed_email(request.provider_message_id, "triage", "no_case_match", **_log_kwargs)
+        db.log_processed_email(request.provider_message_id, "triage", "no_case_match",
+                               parsed_result=parsed, matched_by=match.get("matched_by"), **_log_kwargs)
         return ProcessEmailResponse(action="triage", reason="no_case_match")
 
     # 6. Anhänge direkt intern verarbeiten (statt zurück an n8n)
@@ -2202,7 +2207,8 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
         logger.error(f"Readiness check failed: {e}")
 
     # 8. Log
-    db.log_processed_email(request.provider_message_id, parsed.get("mail_type", "new_request"), match["action"], case_id, **_log_kwargs)
+    db.log_processed_email(request.provider_message_id, parsed.get("mail_type", "new_request"), match["action"], case_id,
+                           parsed_result=parsed, matched_by=match.get("matched_by"), **_log_kwargs)
 
     return ProcessEmailResponse(
         action="processed",
