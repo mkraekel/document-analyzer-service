@@ -293,6 +293,11 @@ def check_readiness(case_id: str) -> dict:
     else:
         status = "AWAITING_BROKER_CONFIRMATION"
 
+    # Tatsächlich vollständig = keine offenen Punkte
+    actually_complete = not missing_financing and not missing_docs and not stale_docs and not missing_broker
+    # Business-Complete = Status erlaubt Import (kann durch Override erzwungen sein)
+    is_complete = status in ("READY_FOR_IMPORT", "AWAITING_BROKER_CONFIRMATION")
+
     result = {
         "status": status,
         "missing_financing": missing_financing,
@@ -303,7 +308,9 @@ def check_readiness(case_id: str) -> dict:
         "manual_overrides_applied": overrides_applied,
         "effective_view": view,
         "approve_import": approve_import,
-        "is_complete": status in ("READY_FOR_IMPORT", "AWAITING_BROKER_CONFIRMATION"),
+        "is_complete": is_complete,
+        "actually_complete": actually_complete,
+        "forced_approval": approve_import and not actually_complete,
     }
 
     # In DB speichern (cached case durchreichen → spart 1 DB call)
