@@ -26,6 +26,7 @@ JSONB_COLUMNS = {
     "fin_cases": {
         "facts_extracted", "answers_user", "manual_overrides", "derived_values",
         "docs_index", "conversation_ids", "readiness", "audit_log",
+        "europace_response",
     },
     "fin_documents": {"extracted_data"},
     "processed_emails": {"attachments_hashes"},
@@ -97,6 +98,9 @@ CREATE TABLE IF NOT EXISTS fin_cases (
     onedrive_folder_id TEXT DEFAULT '',
     onedrive_web_url TEXT DEFAULT '',
     last_status_change TEXT DEFAULT '',
+    europace_case_id TEXT DEFAULT '',
+    europace_response JSONB DEFAULT '{}'::jsonb,
+    final_payload_preview TEXT DEFAULT '',
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -147,6 +151,9 @@ CREATE TABLE IF NOT EXISTS email_test_log (
 
 _MIGRATIONS_SQL = """
 ALTER TABLE fin_cases ADD COLUMN IF NOT EXISTS onedrive_web_url TEXT DEFAULT '';
+ALTER TABLE fin_cases ADD COLUMN IF NOT EXISTS europace_case_id TEXT DEFAULT '';
+ALTER TABLE fin_cases ADD COLUMN IF NOT EXISTS europace_response JSONB DEFAULT '{}'::jsonb;
+ALTER TABLE fin_cases ADD COLUMN IF NOT EXISTS final_payload_preview TEXT DEFAULT '';
 """
 
 

@@ -2000,6 +2000,25 @@ async def process_email(request: ProcessEmailRequest):
         raise HTTPException(status_code=500, detail={"error": str(e), "traceback": tb})
 
 
+async def _process_gdrive_async(case_id: str, links: list):
+    """Background task: process Google Drive links after email processing."""
+    try:
+        import gdrive
+        result = gdrive.process_google_drive_links(case_id=case_id, links=links)
+        processed = result.get("files_processed", 0)
+        logger.info(f"[{case_id}] Google Drive async: {processed} files processed")
+
+        # Re-run readiness check after Google Drive files are analyzed
+        if processed > 0:
+            try:
+                readiness_result = rdns.check_readiness(case_id)
+                notify.dispatch_notifications(case_id, readiness_result)
+            except Exception as e:
+                logger.error(f"[{case_id}] Readiness after gdrive failed: {e}")
+    except Exception as e:
+        logger.error(f"[{case_id}] Google Drive async processing failed: {e}")
+
+
 async def _process_email_impl(request: ProcessEmailRequest):
 
     # 1. Dedup-Check
@@ -2071,6 +2090,22 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
     except Exception as e:
         logger.error(f"AI parse failed: {e}")
         parsed = {"mail_type": "new_request", "is_relevant": True}
+
+    # 3b. Google Drive Links per Regex extrahieren (zuverlässiger als GPT)
+    import re as _re
+    _gdrive_pattern = r'https?://drive\.google\.com/(?:drive/folders|file/d|open\?id=)[^\s<>"\')\]]+'
+    _gdrive_matches = _re.findall(_gdrive_pattern, (request.body_text or "") + " " + (request.body_html or ""))
+    if _gdrive_matches:
+        # Deduplizieren
+        _seen = set()
+        _unique_links = []
+        for link in _gdrive_matches:
+            clean = link.rstrip(".,;:)")
+            if clean not in _seen:
+                _seen.add(clean)
+                _unique_links.append(clean)
+        parsed["google_drive_links"] = _unique_links
+        logger.info(f"Google Drive links found in email: {len(_unique_links)}")
 
     # Relevanz prüfen
     is_broker = gate["is_internal_reply"]
@@ -2214,6 +2249,13 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
     except Exception as e:
         logger.error(f"Readiness check failed: {e}")
 
+    # 7b. Google Drive Links async verarbeiten (falls vorhanden)
+    gdrive_links = parsed.get("google_drive_links", [])
+    if gdrive_links:
+        import asyncio
+        logger.info(f"[{case_id}] Google Drive links detected: {len(gdrive_links)} → triggering async processing")
+        asyncio.create_task(_process_gdrive_async(case_id, gdrive_links))
+
     # 8. Log
     db.log_processed_email(request.provider_message_id, parsed.get("mail_type", "new_request"), match["action"], case_id,
                            parsed_result=parsed, matched_by=match.get("matched_by"), **_log_kwargs)
@@ -2226,7 +2268,7 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
         onedrive_folder_id=request.onedrive_folder_id,
         needs_onedrive_folder=needs_folder,
         files_to_upload=[],  # Leer – Anhänge wurden intern verarbeitet
-        google_drive_links=parsed.get("google_drive_links", []),
+        google_drive_links=gdrive_links,
         readiness=readiness_result,
     )
 
@@ -2526,6 +2568,312 @@ async def clear_dry_run_log():
     if os.path.exists(log_path):
         os.remove(log_path)
     return {"cleared": True, "note": "SeaTable email_test_log bitte manuell in SeaTable leeren"}
+
+
+# ============================================
+# REMINDER CHECK ENDPOINT
+# ============================================
+
+REMINDER_DAYS = int(os.getenv("REMINDER_DAYS", "3"))
+MAX_REMINDERS = int(os.getenv("MAX_REMINDERS", "3"))
+
+
+def _count_reminders_in_audit(audit_log: list, current_status: str) -> int:
+    """Zählt wie viele Erinnerungen im audit_log für den aktuellen Status gesendet wurden."""
+    count = 0
+    for entry in audit_log:
+        if (entry.get("event") == "reminder_sent"
+                and entry.get("status") == current_status):
+            count += 1
+    return count
+
+
+def _has_recent_emails(case_id: str, days: int) -> bool:
+    """Prüft ob in den letzten X Tagen eine E-Mail für diesen Case eingegangen ist."""
+    from datetime import datetime, timedelta
+    import seatable as db
+
+    cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M")
+    try:
+        rows = db.query_rows(
+            "processed_emails",
+            columns=["case_id", "processed_at"],
+            where="case_id = %s AND processed_at > %s",
+            where_params=(case_id, cutoff),
+            limit=1,
+        )
+        return len(rows) > 0
+    except Exception as e:
+        logger.warning(f"Fehler beim Prüfen neuer E-Mails für {case_id}: {e}")
+        return False
+
+
+def check_and_send_reminders() -> dict:
+    """
+    Prüft alle aktiven Cases und sendet Erinnerungen falls nötig.
+    Gibt zurück: {sent: int, checked: int, skipped_reasons: dict}
+    """
+    from datetime import datetime
+    import case_logic as cases
+    import readiness as rdns
+    import notify
+
+    active_cases = cases.get_all_active_cases()
+    reminder_statuses = {"NEEDS_QUESTIONS_PARTNER", "NEEDS_QUESTIONS_BROKER"}
+
+    sent = 0
+    checked = 0
+    skipped_reasons = {
+        "wrong_status": 0,
+        "no_last_change": 0,
+        "too_recent": 0,
+        "max_reminders_reached": 0,
+        "recent_email": 0,
+        "error": 0,
+    }
+
+    for case in active_cases:
+        status = case.get("status", "")
+        case_id = case.get("case_id", "")
+
+        if status not in reminder_statuses:
+            skipped_reasons["wrong_status"] += 1
+            continue
+
+        checked += 1
+
+        # Prüfe wie lange der Case schon in diesem Status ist
+        last_change = case.get("last_status_change", "")
+        if not last_change:
+            skipped_reasons["no_last_change"] += 1
+            continue
+
+        try:
+            last_change_dt = datetime.fromisoformat(last_change.replace("Z", "+00:00").replace("+00:00", ""))
+            days_since = (datetime.utcnow() - last_change_dt).days
+        except Exception as e:
+            logger.warning(f"Kann last_status_change nicht parsen für {case_id}: {last_change} ({e})")
+            skipped_reasons["error"] += 1
+            continue
+
+        if days_since < REMINDER_DAYS:
+            skipped_reasons["too_recent"] += 1
+            continue
+
+        # Prüfe wie viele Erinnerungen schon gesendet wurden
+        audit_log = case.get("audit_log", [])
+        if isinstance(audit_log, str):
+            try:
+                audit_log = json.loads(audit_log)
+            except Exception:
+                audit_log = []
+        if not isinstance(audit_log, list):
+            audit_log = []
+
+        reminder_count = _count_reminders_in_audit(audit_log, status)
+        if reminder_count >= MAX_REMINDERS:
+            skipped_reasons["max_reminders_reached"] += 1
+            continue
+
+        # Prüfe ob kürzlich eine neue E-Mail eingegangen ist
+        if _has_recent_emails(case_id, REMINDER_DAYS):
+            skipped_reasons["recent_email"] += 1
+            continue
+
+        # Readiness Check durchführen für aktuelle Daten
+        try:
+            readiness_result = rdns.check_readiness(case_id)
+        except Exception as e:
+            logger.error(f"Readiness check fehlgeschlagen für {case_id}: {e}")
+            skipped_reasons["error"] += 1
+            continue
+
+        # Erinnerung senden
+        target = "partner" if status == "NEEDS_QUESTIONS_PARTNER" else "broker"
+        try:
+            notify.send_reminder(case_id, readiness_result, reminder_count + 1, target=target)
+        except Exception as e:
+            logger.error(f"Reminder-Versand fehlgeschlagen für {case_id}: {e}")
+            skipped_reasons["error"] += 1
+            continue
+
+        # Audit log updaten
+        try:
+            case_fresh = cases.load_case(case_id)
+            if case_fresh:
+                import seatable as db
+                audit = case_fresh.get("_audit_log", [])
+                audit.append({
+                    "event": "reminder_sent",
+                    "ts": datetime.utcnow().isoformat(),
+                    "reminder_count": reminder_count + 1,
+                    "status": status,
+                    "target": target,
+                })
+                # Max 100 Einträge
+                audit = audit[-100:]
+                db.update_row("fin_cases", case_fresh["_id"], {
+                    "audit_log": json.dumps(audit),
+                })
+        except Exception as e:
+            logger.warning(f"Audit-Log Update fehlgeschlagen für {case_id}: {e}")
+
+        sent += 1
+        logger.info(f"Reminder #{reminder_count + 1} gesendet für Case {case_id} (Status: {status}, Target: {target})")
+
+    return {
+        "sent": sent,
+        "checked": checked,
+        "total_active": len(active_cases),
+        "skipped_reasons": skipped_reasons,
+    }
+
+
+@app.post("/check-reminders")
+async def check_reminders():
+    """
+    Prüft alle aktiven Cases und sendet Erinnerungen falls nötig.
+
+    Wird von einem n8n Schedule Trigger (1x täglich) aufgerufen.
+
+    Logik:
+    - Cases mit Status NEEDS_QUESTIONS_PARTNER oder NEEDS_QUESTIONS_BROKER
+    - Wenn last_status_change älter als REMINDER_DAYS (default: 3)
+    - UND keine neue E-Mail in den letzten REMINDER_DAYS eingegangen
+    - UND weniger als MAX_REMINDERS (default: 3) Erinnerungen gesendet
+    - DANN: Erinnerung senden
+    """
+    try:
+        result = check_and_send_reminders()
+        logger.info(f"Reminder-Check abgeschlossen: {result}")
+        return {
+            "success": True,
+            "reminders_sent": result["sent"],
+            "cases_checked": result["checked"],
+            "total_active_cases": result["total_active"],
+            "skipped_reasons": result["skipped_reasons"],
+            "config": {
+                "reminder_days": REMINDER_DAYS,
+                "max_reminders": MAX_REMINDERS,
+            },
+        }
+    except Exception as e:
+        logger.error(f"Reminder-Check fehlgeschlagen: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)},
+        )
+
+
+# ============================================
+# IMPORT CASE ENDPOINT
+# ============================================
+
+# ============================================
+# GOOGLE DRIVE PROCESSING
+# ============================================
+
+class ProcessGoogleDriveRequest(BaseModel):
+    case_id: str
+    google_drive_links: list  # ["https://drive.google.com/drive/folders/..."]
+
+class ProcessGoogleDriveResponse(BaseModel):
+    success: bool
+    case_id: str
+    files_found: int = 0
+    files_processed: int = 0
+    files_skipped: int = 0
+    results: list = []
+    errors: list = []
+    readiness: Optional[dict] = None
+
+@app.post("/process-google-drive", response_model=ProcessGoogleDriveResponse)
+async def process_google_drive(request: ProcessGoogleDriveRequest):
+    """
+    Downloads files from Google Drive links and analyzes them.
+    Called after email processing when google_drive_links are detected,
+    or manually from the dashboard.
+    """
+    logger.info(f"process-google-drive: {request.case_id} / {len(request.google_drive_links)} links")
+
+    if not request.google_drive_links:
+        return ProcessGoogleDriveResponse(
+            success=False, case_id=request.case_id,
+            errors=["Keine Google Drive Links angegeben"],
+        )
+
+    try:
+        import gdrive
+        result = gdrive.process_google_drive_links(
+            case_id=request.case_id,
+            links=request.google_drive_links,
+        )
+
+        # Run readiness check after processing
+        readiness_result = None
+        if result.get("files_processed", 0) > 0:
+            try:
+                readiness_result = rdns.check_readiness(request.case_id)
+                notify.dispatch_notifications(request.case_id, readiness_result)
+            except Exception as e:
+                logger.error(f"Readiness check after gdrive failed: {e}")
+
+        return ProcessGoogleDriveResponse(
+            case_id=request.case_id,
+            readiness=readiness_result,
+            **result,
+        )
+
+    except ValueError as e:
+        # Missing GOOGLE_SERVICE_ACCOUNT_JSON
+        logger.error(f"Google Drive config error: {e}")
+        return ProcessGoogleDriveResponse(
+            success=False, case_id=request.case_id,
+            errors=[str(e)],
+        )
+    except Exception as e:
+        logger.error(f"process-google-drive failed: {traceback.format_exc()}")
+        return ProcessGoogleDriveResponse(
+            success=False, case_id=request.case_id,
+            errors=[f"Unerwarteter Fehler: {e}"],
+        )
+
+
+class ImportCaseRequest(BaseModel):
+    case_id: str
+    dry_run: Optional[bool] = False
+
+class ImportCaseResponse(BaseModel):
+    success: bool
+    case_id: str
+    europace_case_id: Optional[str] = None
+    errors: list = []
+    warnings: list = []
+    payload_preview: Optional[dict] = None
+    dry_run: bool = False
+
+@app.post("/import-case", response_model=ImportCaseResponse)
+async def import_case(request: ImportCaseRequest):
+    """
+    Triggert den Europace-Import fuer einen Case.
+    dry_run=True: Nur Payload bauen und validieren, nicht an API senden.
+    """
+    import import_builder
+
+    try:
+        result = import_builder.execute_import(
+            case_id=request.case_id,
+            dry_run=request.dry_run,
+        )
+        return ImportCaseResponse(**result)
+    except Exception as e:
+        logger.error(f"Import failed for {request.case_id}: {e}")
+        return ImportCaseResponse(
+            success=False,
+            case_id=request.case_id,
+            errors=[str(e)],
+            dry_run=request.dry_run,
+        )
 
 
 if __name__ == "__main__":

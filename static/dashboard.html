@@ -571,6 +571,7 @@ async function openCase(caseId) {
             ${c.onedrive_folder_id
               ? `<button onclick="scanDocuments('${caseId}')" class="text-xs bg-purple-50 text-purple-600 hover:bg-purple-100 px-3 py-1 rounded border border-purple-200">Dokumente scannen</button>`
               : ''}
+            <button onclick="processGoogleDrive('${caseId}')" class="text-xs bg-green-50 text-green-600 hover:bg-green-100 px-3 py-1 rounded border border-green-200">Google Drive importieren</button>
           </div>
         </div>
         ${c.documents.length > 0 ? `
@@ -705,9 +706,20 @@ function buildActionButtons(caseId, readiness, status) {
     freigabeBtn = `<button onclick="caseAction('${caseId}','FREIGABE')" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">FREIGABE</button>`;
   }
 
+  // Import Button: nur wenn READY_FOR_IMPORT und approve_import=true
+  let importBtn = '';
+  if (status === 'READY_FOR_IMPORT' && approveImport) {
+    importBtn = `
+      <div class="flex flex-col gap-1">
+        <button onclick="triggerImport('${caseId}')" class="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700 font-semibold">Import starten</button>
+        <button onclick="triggerImportDryRun('${caseId}')" class="text-xs text-purple-500 hover:text-purple-700 underline mt-1">Dry-Run (nur validieren)</button>
+      </div>`;
+  }
+
   return `
     <div class="flex gap-3 flex-wrap items-start">
       ${freigabeBtn}
+      ${importBtn}
       <button onclick="caseAction('${caseId}','WAIT_FOR_DOCS')" class="bg-yellow-500 text-white px-4 py-2 rounded hover:bg-yellow-600">WAIT_FOR_DOCS</button>
       <button onclick="caseAction('${caseId}','RECHECK')" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">Recheck</button>
     </div>
@@ -747,6 +759,42 @@ async function caseAction(caseId, action) {
   } catch(e) { toast('Fehler: ' + e.message, false); }
 }
 
+async function triggerImport(caseId) {
+  if (!confirm('Europace-Import starten?\n\nDer Case wird an die Europace API gesendet.')) return;
+  try {
+    toast('Import wird gestartet...', true);
+    const r = await api(`/api/dashboard/case/${caseId}/import`, 'POST', { dry_run: false });
+    if (r.success) {
+      toast(`Import erfolgreich! Europace-ID: ${r.europace_case_id || 'n/a'}`);
+    } else {
+      const errMsg = (r.errors || []).join(', ') || 'Unbekannter Fehler';
+      toast('Import fehlgeschlagen: ' + errMsg, false);
+    }
+    if (r.warnings && r.warnings.length > 0) {
+      console.warn('Import-Warnungen:', r.warnings);
+    }
+    openCase(caseId);
+    loadStats();
+  } catch(e) { toast('Import-Fehler: ' + e.message, false); }
+}
+
+async function triggerImportDryRun(caseId) {
+  try {
+    toast('Dry-Run: Payload wird validiert...', true);
+    const r = await api(`/api/dashboard/case/${caseId}/import`, 'POST', { dry_run: true });
+    if (r.success) {
+      let msg = 'Dry-Run OK: Payload ist valide.';
+      if (r.warnings && r.warnings.length > 0) {
+        msg += ` (${r.warnings.length} Warnungen)`;
+      }
+      toast(msg);
+    } else {
+      const errMsg = (r.errors || []).join('\n') || 'Validierung fehlgeschlagen';
+      toast('Dry-Run fehlgeschlagen:\n' + errMsg, false);
+    }
+  } catch(e) { toast('Dry-Run Fehler: ' + e.message, false); }
+}
+
 async function setOverride(caseId) {
   const key = document.getElementById('override-key').value.trim();
   const val = document.getElementById('override-val').value.trim() || 'true';
@@ -768,6 +816,27 @@ async function scanDocuments(caseId) {
       toast(`${r.scanned} neue Dokumente analysiert`);
     } else {
       toast(r.message || 'Keine neuen Dokumente gefunden');
+    }
+    openCase(caseId);
+  } catch(e) { toast('Fehler: ' + e.message, false); }
+}
+
+async function processGoogleDrive(caseId) {
+  // Optional: ask for manual links
+  const manualLink = prompt('Google Drive Link eingeben (leer lassen = automatisch aus E-Mails suchen):');
+  const body = {};
+  if (manualLink && manualLink.trim()) {
+    body.google_drive_links = [manualLink.trim()];
+  }
+  toast('Google Drive Dateien werden heruntergeladen und analysiert...', true);
+  try {
+    const r = await api(`/api/dashboard/case/${caseId}/process-gdrive`, 'POST', body);
+    if (r.files_processed > 0) {
+      toast(`${r.files_processed} von ${r.files_found} Dateien analysiert`);
+    } else if (r.errors && r.errors.length > 0) {
+      toast('Fehler: ' + r.errors[0], false);
+    } else {
+      toast('Keine Dateien gefunden oder verarbeitet');
     }
     openCase(caseId);
   } catch(e) { toast('Fehler: ' + e.message, false); }

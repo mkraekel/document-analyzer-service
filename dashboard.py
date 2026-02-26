@@ -17,6 +17,7 @@ from typing import Optional
 import seatable as db
 import case_logic as cases
 import readiness as rdns
+import notify
 
 N8N_SCAN_WEBHOOK = os.getenv("N8N_SCAN_WEBHOOK", "")
 N8N_SETUP_CASE_WEBHOOK = os.getenv("N8N_SETUP_CASE_WEBHOOK", "")
@@ -196,6 +197,9 @@ async def dashboard_case_detail(case_id: str):
                 "matched_by": e.get("matched_by", ""),
             })
 
+        # Europace-Felder
+        europace_response = case.get("_europace_response", {})
+
         return {
             "case_id": case_id,
             "applicant_name": case.get("applicant_name"),
@@ -204,6 +208,8 @@ async def dashboard_case_detail(case_id: str):
             "onedrive_folder_id": case.get("onedrive_folder_id", ""),
             "onedrive_web_url": case.get("onedrive_web_url", ""),
             "last_status_change": case.get("last_status_change"),
+            "europace_case_id": case.get("europace_case_id", ""),
+            "europace_response": europace_response,
             "conversation_ids": conv_ids,
             "facts_extracted": facts,
             "answers_user": answers,
@@ -273,6 +279,17 @@ async def dashboard_assign(req: AssignRequest):
 
         # 6. Readiness recheck
         result = rdns.check_readiness(req.case_id)
+
+        # 7. Setup triggern wenn Case keinen OneDrive-Ordner hat oder E-Mail Attachments hatte
+        if N8N_SETUP_CASE_WEBHOOK:
+            needs_setup = not case.get("onedrive_folder_id")
+            has_attachments = email.get("attachments_count", 0) > 0
+            if needs_setup or has_attachments:
+                import asyncio
+                asyncio.create_task(_trigger_setup_case(
+                    case_id=req.case_id,
+                    outlook_message_id=req.provider_message_id,
+                ))
 
         return {"success": True, "case_id": req.case_id, "status": result.get("status")}
     except HTTPException:
@@ -521,6 +538,77 @@ async def check_file_processed(req: CheckFileRequest):
 
 
 # ──────────────────────────────────────────
+# API: Google Drive Processing
+# ──────────────────────────────────────────
+
+class GDriveRequest(BaseModel):
+    google_drive_links: Optional[list] = None  # Optional: override links from case
+
+@router.post("/api/dashboard/case/{case_id}/process-gdrive")
+async def dashboard_process_gdrive(case_id: str, req: GDriveRequest = None):
+    """Downloads and analyzes files from Google Drive links for a case."""
+    try:
+        import gdrive
+
+        case = cases.load_case(case_id)
+        if not case:
+            raise HTTPException(status_code=404, detail="Case nicht gefunden")
+
+        # Use provided links or look in case audit_log/emails for stored links
+        links = (req.google_drive_links if req and req.google_drive_links else None)
+
+        if not links:
+            # Try to find google_drive_links from processed emails
+            emails = db.search_rows("processed_emails", "case_id", case_id)
+            for email in emails:
+                parsed = email.get("parsed_result") or {}
+                if isinstance(parsed, str):
+                    try:
+                        parsed = json.loads(parsed)
+                    except Exception:
+                        parsed = {}
+                email_links = parsed.get("google_drive_links", [])
+                if email_links:
+                    links = email_links
+                    break
+
+        if not links:
+            raise HTTPException(
+                status_code=400,
+                detail="Keine Google Drive Links gefunden. Bitte Links manuell angeben.",
+            )
+
+        result = gdrive.process_google_drive_links(case_id=case_id, links=links)
+
+        # Readiness check after processing
+        readiness_result = None
+        if result.get("files_processed", 0) > 0:
+            try:
+                readiness_result = rdns.check_readiness(case_id)
+                notify.dispatch_notifications(case_id, readiness_result, force=True)
+            except Exception as e:
+                logger.error(f"Readiness after gdrive failed: {e}")
+
+        return {
+            "success": result.get("success", False),
+            "case_id": case_id,
+            "files_found": result.get("files_found", 0),
+            "files_processed": result.get("files_processed", 0),
+            "files_skipped": result.get("files_skipped", 0),
+            "results": result.get("results", []),
+            "errors": result.get("errors", []),
+            "readiness": readiness_result,
+        }
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.error(f"Google Drive processing failed: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ──────────────────────────────────────────
 # API: Scan Documents (triggers n8n OneDrive scan)
 # ──────────────────────────────────────────
 
@@ -549,6 +637,15 @@ async def dashboard_scan_documents(case_id: str):
             result = resp.json()
 
         scanned = result.get("scanned", 0)
+
+        # Nach dem Scan: Readiness Check + Notifications
+        try:
+            readiness_result = rdns.check_readiness(case_id)
+            if scanned > 0:
+                notify.dispatch_notifications(case_id, readiness_result, force=True)
+        except Exception as e:
+            logger.error(f"Readiness check after scan failed: {e}")
+
         return {"success": True, "case_id": case_id, "scanned": scanned, "message": result.get("message", "")}
     except HTTPException:
         raise
@@ -592,4 +689,54 @@ async def dashboard_outgoing_emails(case_id: Optional[str] = None):
             })
         return {"emails": items}
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ──────────────────────────────────────────
+# API: Import Case to Europace
+# ──────────────────────────────────────────
+
+class ImportRequest(BaseModel):
+    dry_run: Optional[bool] = False
+
+@router.post("/api/dashboard/case/{case_id}/import")
+async def dashboard_import_case(case_id: str, req: ImportRequest = None):
+    """Triggert den Europace-Import fuer einen Case aus dem Dashboard."""
+    try:
+        import import_builder
+
+        case = cases.load_case(case_id)
+        if not case:
+            raise HTTPException(status_code=404, detail="Case nicht gefunden")
+
+        # Status pruefen
+        if case.get("status") != "READY_FOR_IMPORT":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Case hat Status '{case.get('status')}', erwartet 'READY_FOR_IMPORT'"
+            )
+
+        # APPROVE_IMPORT Override pruefen
+        overrides = case.get("_manual_overrides", {})
+        if not overrides.get("APPROVE_IMPORT"):
+            raise HTTPException(
+                status_code=400,
+                detail="Import nicht freigegeben. Bitte zuerst FREIGABE erteilen."
+            )
+
+        dry_run = req.dry_run if req else False
+        result = import_builder.execute_import(case_id=case_id, dry_run=dry_run)
+
+        return {
+            "success": result["success"],
+            "case_id": case_id,
+            "europace_case_id": result.get("europace_case_id"),
+            "errors": result.get("errors", []),
+            "warnings": result.get("warnings", []),
+            "dry_run": dry_run,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Dashboard import failed: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))

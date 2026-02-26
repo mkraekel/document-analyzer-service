@@ -331,6 +331,92 @@ def _record_cooldown(case_id: str, status: str):
     _notification_cooldown[(case_id, status)] = time.time()
 
 
+def send_reminder(case_id: str, readiness_result: dict, reminder_count: int, target: str = "partner"):
+    """
+    Sendet eine Erinnerungs-Benachrichtigung (gleicher Inhalt wie Original,
+    aber mit 'Erinnerung' Prefix im Betreff).
+
+    target: "partner" oder "broker"
+    """
+    import case_logic as cases
+
+    view = readiness_result.get("effective_view", {})
+    case = cases.load_case(case_id)
+    partner_email = case.get("partner_email", "") if case else ""
+
+    ordinal = f"{reminder_count}." if reminder_count > 1 else ""
+    prefix = f"[{ordinal} Erinnerung] " if ordinal else "[Erinnerung] "
+
+    if target == "partner" and partner_email:
+        body = _generate_questions_with_ai(
+            case_id=case_id,
+            missing_financing=readiness_result.get("missing_financing", []),
+            missing_docs=readiness_result.get("missing_docs", []),
+            stale_docs=readiness_result.get("stale_docs", []),
+            effective_view=view,
+            recipient="partner",
+        )
+        if not body:
+            logger.info(f"Reminder für {case_id}: kein Body generiert, überspringe")
+            return
+
+        reminder_note = (
+            f"\n\n--- Dies ist eine automatische Erinnerung (Nr. {reminder_count}). "
+            f"Wir haben noch keine Rückmeldung zu unserer vorherigen Anfrage erhalten. ---"
+        )
+        body_with_note = body + reminder_note
+
+        html_body = f"""<html><body>
+<p>{body.replace(chr(10), '<br>')}</p>
+<br>
+<p style="color: #666; font-size: 0.9em;">
+<em>Dies ist eine automatische Erinnerung (Nr. {reminder_count}).
+Wir haben noch keine Rückmeldung zu unserer vorherigen Anfrage erhalten.</em></p>
+<br>
+<p>Case-Referenz: <strong>{case_id}</strong></p>
+<p>Mit freundlichen Grüßen<br>Alexander Heil Finanzierung</p>
+</body></html>"""
+
+        _send_email(
+            to=partner_email,
+            subject=f"{prefix}Rückfrage zu Ihrer Finanzierungsanfrage [{case_id}]",
+            html_body=html_body,
+            text_body=body_with_note,
+        )
+        logger.info(f"Reminder #{reminder_count} gesendet an Partner {partner_email} für Case {case_id}")
+
+    elif target == "broker":
+        body = _generate_questions_with_ai(
+            case_id=case_id,
+            missing_financing=readiness_result.get("missing_financing", []),
+            missing_docs=readiness_result.get("missing_docs", []),
+            stale_docs=readiness_result.get("stale_docs", []),
+            effective_view=view,
+            recipient="broker",
+        )
+        if not body:
+            logger.info(f"Reminder für {case_id}: kein Body generiert, überspringe")
+            return
+
+        html_body = f"""<html><body>
+<h3>{prefix}Interne Rückfrage: {case_id}</h3>
+<p>{body.replace(chr(10), '<br>')}</p>
+<p style="color: #666; font-size: 0.9em;">
+<em>Automatische Erinnerung Nr. {reminder_count}</em></p>
+</body></html>"""
+
+        _send_email(
+            to=BROKER_EMAIL,
+            subject=f"{prefix}[INTERN] Rückfrage Case {case_id}",
+            html_body=html_body,
+            text_body=body,
+        )
+        logger.info(f"Reminder #{reminder_count} gesendet an Broker für Case {case_id}")
+
+    else:
+        logger.warning(f"Reminder für {case_id}: target={target}, partner_email={partner_email} – übersprungen")
+
+
 def dispatch_notifications(case_id: str, readiness_result: dict, force: bool = False):
     """
     Sendet die richtige Benachrichtigung basierend auf Status.
@@ -366,8 +452,9 @@ def dispatch_notifications(case_id: str, readiness_result: dict, force: bool = F
         _record_cooldown(case_id, status)
 
     elif status == "READY_FOR_IMPORT":
-        logger.info(f"Case {case_id} ready for import – triggering import builder")
-        # Import wird durch API Endpoint ausgelöst (return status to n8n)
+        logger.info(f"Case {case_id} ready for import – warte auf manuelle Freigabe im Dashboard (Import-Button)")
+        # Kein automatischer Import-Trigger. Der Broker gibt den Import
+        # bewusst ueber den Dashboard-Button frei.
 
     else:
         logger.info(f"Status {status} – keine Benachrichtigung nötig")

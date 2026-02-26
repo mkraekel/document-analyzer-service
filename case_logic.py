@@ -92,7 +92,7 @@ def load_case(case_id: str) -> Optional[dict]:
     case = rows[0]
     # JSON-Felder parsen (dict-Felder → default {}, list-Felder → default [])
     for field in ["facts_extracted", "answers_user", "manual_overrides", "derived_values",
-                  "docs_index", "readiness", "actors"]:
+                  "docs_index", "readiness", "actors", "europace_response"]:
         case[f"_{field}"] = _parse_json_field(case, field, default={})
     for field in ["audit_log", "conversation_ids"]:
         case[f"_{field}"] = _parse_json_field(case, field, default=[])
