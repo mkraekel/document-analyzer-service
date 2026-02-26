@@ -24,6 +24,16 @@
   .field-label { min-width: 180px; font-size: 0.8rem; color: #64748b; font-weight: 500; }
   .field-value { flex: 1; font-size: 0.875rem; }
   .btn-sm { padding: 2px 10px; border-radius: 6px; font-size: 0.75rem; cursor: pointer; }
+  .text-truncate { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .text-truncate.expanded { -webkit-line-clamp: unset; }
+  .stat-card { cursor: pointer; transition: transform 0.1s, box-shadow 0.1s; }
+  .stat-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+  .pagination-btn { padding: 4px 12px; border-radius: 6px; font-size: 0.8rem; cursor: pointer; border: 1px solid #e2e8f0; }
+  .pagination-btn:hover { background: #f1f5f9; }
+  .pagination-btn.active { background: #2563eb; color: white; border-color: #2563eb; }
+  .pagination-btn:disabled { opacity: 0.4; cursor: default; }
+  .search-input { border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px 12px; font-size: 0.875rem; width: 100%; max-width: 400px; }
+  .search-input:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,0.2); }
 </style>
 </head>
 <body class="bg-gray-50 min-h-screen">
@@ -56,10 +66,15 @@
 
   <!-- Triage Tab -->
   <div id="panel-triage" class="hidden">
-    <div id="triage-actions" class="flex justify-end gap-3 mb-3 hidden">
-      <button onclick="bulkDismiss()" class="text-sm bg-gray-200 text-gray-600 px-3 py-1 rounded hover:bg-red-100 hover:text-red-700">Alle sichtbaren ignorieren</button>
+    <div id="triage-controls" class="flex justify-between items-center gap-3 mb-4 hidden">
+      <div class="flex gap-3 items-center">
+        <input type="text" id="triage-search" class="search-input" placeholder="Suche nach Name, Betreff, Absender..." oninput="filterTriage(this.value)">
+        <span id="triage-count-label" class="text-sm text-gray-400"></span>
+      </div>
+      <button onclick="bulkDismiss()" class="text-sm bg-gray-200 text-gray-600 px-3 py-1 rounded hover:bg-red-100 hover:text-red-700 whitespace-nowrap">Alle sichtbaren ignorieren</button>
     </div>
     <div id="triage-list" class="space-y-4"></div>
+    <div id="triage-pagination" class="flex justify-center items-center gap-2 mt-4 hidden"></div>
     <p id="triage-empty" class="text-gray-400 text-center py-12 hidden">Keine E-Mails in der Triage-Queue.</p>
   </div>
 
@@ -99,6 +114,42 @@ const FIELD_LABELS = {
   partnerId: 'Partner-ID',
   employment_type: 'Beschaeftigungsart',
 };
+
+const STATUS_LABELS = {
+  'INTAKE': 'Eingang',
+  'WAITING_FOR_DOCUMENTS': 'Warte auf Dokumente',
+  'NEEDS_QUESTIONS_PARTNER': 'Rueckfragen Partner',
+  'NEEDS_QUESTIONS_BROKER': 'Rueckfragen Broker',
+  'NEEDS_MANUAL_REVIEW_BROKER': 'Manuelle Pruefung',
+  'AWAITING_BROKER_CONFIRMATION': 'Warte auf Bestaetigung',
+  'READY_FOR_IMPORT': 'Bereit fuer Import',
+  'IMPORTED': 'Importiert',
+};
+
+function formatTime(isoStr) {
+  if (!isoStr) return '-';
+  try {
+    const d = new Date(isoStr);
+    if (isNaN(d.getTime())) return isoStr;
+    const now = new Date();
+    const diffMs = now - d;
+    const diffMin = Math.floor(diffMs / 60000);
+    if (diffMin < 0) return d.toLocaleString('de-DE', {day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+    if (diffMin < 1) return 'gerade eben';
+    if (diffMin < 60) return `vor ${diffMin} Min.`;
+    const diffH = Math.floor(diffMin / 60);
+    if (diffH < 24) return `vor ${diffH} Std.`;
+    const diffD = Math.floor(diffH / 24);
+    if (diffD < 7) return `vor ${diffD} Tag${diffD > 1 ? 'en' : ''}`;
+    return d.toLocaleString('de-DE', {day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  } catch(e) { return isoStr; }
+}
+
+// Triage pagination state
+let triagePage = 0;
+const TRIAGE_PER_PAGE = 15;
+let triageSearchTerm = '';
+let allTriageItems = [];
 
 // ── Tabs ──
 function showTab(tab) {
@@ -141,7 +192,8 @@ function statusBadge(status) {
     'NEEDS_MANUAL_REVIEW_BROKER': 'badge-red', 'AWAITING_BROKER_CONFIRMATION': 'badge-blue',
     'READY_FOR_IMPORT': 'badge-green', 'IMPORTED': 'badge-green',
   };
-  return `<span class="badge ${map[status] || 'badge-gray'}">${status}</span>`;
+  const label = STATUS_LABELS[status] || status;
+  return `<span class="badge ${map[status] || 'badge-gray'}" title="${status}">${label}</span>`;
 }
 
 // ── Load All ──
@@ -155,10 +207,10 @@ async function loadAll() {
 async function loadStats() {
   const d = await api('/api/dashboard/stats');
   document.getElementById('stats-cards').innerHTML = `
-    <div class="card text-center"><div class="text-3xl font-bold text-blue-600">${d.cases_total}</div><div class="text-sm text-gray-500">Cases</div></div>
-    <div class="card text-center"><div class="text-3xl font-bold text-red-500">${d.triage_count}</div><div class="text-sm text-gray-500">Triage</div></div>
-    <div class="card text-center"><div class="text-3xl font-bold text-purple-600">${d.documents_total}</div><div class="text-sm text-gray-500">Dokumente</div></div>
-    <div class="card text-center"><div class="text-3xl font-bold text-gray-600">${d.emails_total}</div><div class="text-sm text-gray-500">E-Mails</div></div>
+    <div class="card stat-card text-center" onclick="showTab('cases')"><div class="text-3xl font-bold text-blue-600">${d.cases_total}</div><div class="text-sm text-gray-500">Cases</div></div>
+    <div class="card stat-card text-center" onclick="showTab('triage')"><div class="text-3xl font-bold text-red-500">${d.triage_count}</div><div class="text-sm text-gray-500">Triage</div></div>
+    <div class="card stat-card text-center" onclick="showTab('cases')"><div class="text-3xl font-bold text-purple-600">${d.documents_total}</div><div class="text-sm text-gray-500">Dokumente</div></div>
+    <div class="card stat-card text-center" onclick="showTab('outgoing')"><div class="text-3xl font-bold text-gray-600">${d.emails_total}</div><div class="text-sm text-gray-500">E-Mails</div></div>
   `;
   const badge = document.getElementById('triage-badge');
   if (d.triage_count > 0) { badge.textContent = d.triage_count; badge.classList.remove('hidden'); }
@@ -173,59 +225,146 @@ async function loadStats() {
 // ── Triage ──
 async function loadTriage() {
   const d = await api('/api/dashboard/triage');
-  // allCases wird bereits von loadCases() befüllt – kein doppelter Fetch
+  allTriageItems = d.triage || [];
+  triagePage = 0;
+  triageSearchTerm = '';
+  const searchInput = document.getElementById('triage-search');
+  if (searchInput) searchInput.value = '';
+  renderTriagePage();
+}
+
+function filterTriage(term) {
+  triageSearchTerm = term.toLowerCase().trim();
+  triagePage = 0;
+  renderTriagePage();
+}
+
+function renderTriagePage() {
   const list = document.getElementById('triage-list');
   const empty = document.getElementById('triage-empty');
+  const controls = document.getElementById('triage-controls');
+  const pagination = document.getElementById('triage-pagination');
 
-  const actions = document.getElementById('triage-actions');
-  if (!d.triage || d.triage.length === 0) {
+  // Filter
+  let filtered = allTriageItems;
+  if (triageSearchTerm) {
+    filtered = allTriageItems.filter(e => {
+      const parsed = e.parsed_result || {};
+      const searchable = [e.from_email, e.subject, e.body_text,
+        parsed.applicant_firstName, parsed.applicant_lastName, parsed.partner_email
+      ].filter(Boolean).join(' ').toLowerCase();
+      return searchable.includes(triageSearchTerm);
+    });
+  }
+
+  if (filtered.length === 0) {
     list.innerHTML = '';
     empty.classList.remove('hidden');
-    actions.classList.add('hidden');
+    controls.classList.toggle('hidden', allTriageItems.length === 0);
+    pagination.classList.add('hidden');
     triageMsgIds = [];
+    document.getElementById('triage-count-label').textContent =
+      triageSearchTerm ? `0 von ${allTriageItems.length} Ergebnisse` : '';
     return;
   }
   empty.classList.add('hidden');
-  triageMsgIds = d.triage.map(e => e.provider_message_id);
-  actions.classList.remove('hidden');
+  controls.classList.remove('hidden');
 
-  const caseOpts = allCases.map(c => `<option value="${c.case_id}">${c.case_id} - ${c.applicant_name}</option>`).join('');
+  // Pagination
+  const totalPages = Math.ceil(filtered.length / TRIAGE_PER_PAGE);
+  triagePage = Math.min(triagePage, totalPages - 1);
+  const start = triagePage * TRIAGE_PER_PAGE;
+  const pageItems = filtered.slice(start, start + TRIAGE_PER_PAGE);
+  triageMsgIds = filtered.map(e => e.provider_message_id);
 
-  list.innerHTML = d.triage.map(e => {
+  document.getElementById('triage-count-label').textContent =
+    triageSearchTerm ? `${filtered.length} von ${allTriageItems.length} Ergebnisse` : `${filtered.length} E-Mails`;
+
+  const caseOpts = allCases.map(c => `<option value="${c.case_id}">${c.applicant_name || c.case_id}</option>`).join('');
+
+  list.innerHTML = pageItems.map(e => {
     const parsed = e.parsed_result || {};
     const nameGuess = [parsed.applicant_firstName, parsed.applicant_lastName].filter(Boolean).join(' ') || '';
     const emailGuess = parsed.partner_email || e.from_email || '';
+    const bodyPreview = (e.body_text || '').substring(0, 250);
+    const hasMore = (e.body_text || '').length > 250;
+    const msgId = e.provider_message_id;
 
     return `
-    <div class="card" id="triage-card-${e.provider_message_id}">
+    <div class="card" id="triage-card-${msgId}">
       <div class="flex justify-between items-start mb-2">
         <div>
-          <span class="font-semibold">${esc(e.from_email)}</span>
-          <span class="text-gray-400 text-sm ml-2">${e.processed_at || ''}</span>
+          <span class="font-semibold text-sm">${esc(e.from_email)}</span>
+          <span class="text-gray-400 text-xs ml-2">${formatTime(e.processed_at)}</span>
         </div>
-        <span class="badge badge-red">Triage</span>
+        <span class="badge badge-red text-xs">Triage</span>
       </div>
-      <div class="font-medium mb-1">${esc(e.subject)}</div>
-      <div class="text-sm text-gray-600 mb-3 whitespace-pre-line">${esc(e.body_text)}</div>
+      <div class="font-medium text-sm mb-1">${esc(e.subject)}</div>
+      <div class="text-xs text-gray-600 mb-2 whitespace-pre-line" id="body-${msgId}">${esc(bodyPreview)}${hasMore ? '...' : ''}</div>
+      ${hasMore ? `<button onclick="toggleTriageBody('${msgId}')" id="body-toggle-${msgId}" class="text-xs text-blue-500 hover:text-blue-700 mb-2">Mehr anzeigen</button>` : ''}
       ${parsed && Object.keys(parsed).length > 0
-        ? `<details class="mb-3"><summary class="text-xs text-gray-400 cursor-pointer">GPT Parsing</summary><pre class="json">${esc(JSON.stringify(parsed, null, 2))}</pre></details>`
+        ? `<details class="mb-2"><summary class="text-xs text-gray-400 cursor-pointer">GPT Parsing</summary><pre class="json">${esc(JSON.stringify(parsed, null, 2))}</pre></details>`
         : ''}
-      <div class="flex gap-2 items-center flex-wrap mb-2">
-        <select id="assign-${e.provider_message_id}" class="border rounded px-2 py-1 text-sm">
-          <option value="">Bestehendem Case zuordnen...</option>
+      <div class="flex gap-2 items-center flex-wrap">
+        <select id="assign-${msgId}" class="border rounded px-2 py-1 text-sm">
+          <option value="">Case zuordnen...</option>
           ${caseOpts}
         </select>
-        <button onclick="assignEmail('${e.provider_message_id}')" class="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700">Zuordnen</button>
-        <button onclick="dismissEmail('${e.provider_message_id}')" class="bg-gray-200 text-gray-700 px-3 py-1 rounded text-sm hover:bg-gray-300">Ignorieren</button>
+        <button onclick="assignEmail('${msgId}')" class="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700">Zuordnen</button>
+        <button onclick="dismissEmail('${msgId}')" class="bg-gray-200 text-gray-700 px-3 py-1 rounded text-sm hover:bg-gray-300">Ignorieren</button>
+        <button onclick="toggleNewCase('${msgId}')" class="text-xs text-green-600 hover:text-green-800 underline ml-2">+ Neuer Case</button>
       </div>
-      <div class="flex gap-2 items-center flex-wrap border-t pt-2">
-        <span class="text-xs text-gray-400">Neuen Case:</span>
-        <input id="newcase-name-${e.provider_message_id}" type="text" value="${esc(nameGuess)}" placeholder="Name" class="border rounded px-2 py-1 text-sm w-40">
-        <input id="newcase-email-${e.provider_message_id}" type="text" value="${esc(emailGuess)}" placeholder="E-Mail" class="border rounded px-2 py-1 text-sm w-48">
-        <button onclick="createCaseFromTriage('${e.provider_message_id}')" class="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700">+ Neuen Case anlegen</button>
+      <div id="newcase-section-${msgId}" class="hidden flex gap-2 items-center flex-wrap border-t pt-2 mt-2">
+        <input id="newcase-name-${msgId}" type="text" value="${esc(nameGuess)}" placeholder="Name" class="border rounded px-2 py-1 text-sm w-40">
+        <input id="newcase-email-${msgId}" type="text" value="${esc(emailGuess)}" placeholder="E-Mail" class="border rounded px-2 py-1 text-sm w-48">
+        <button onclick="createCaseFromTriage('${msgId}')" class="bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700">Case anlegen</button>
       </div>
     </div>
   `}).join('');
+
+  // Pagination controls
+  if (totalPages > 1) {
+    pagination.classList.remove('hidden');
+    let paginationHtml = `<button class="pagination-btn" onclick="triageGoTo(0)" ${triagePage === 0 ? 'disabled' : ''}>&laquo;</button>`;
+    paginationHtml += `<button class="pagination-btn" onclick="triageGoTo(${triagePage - 1})" ${triagePage === 0 ? 'disabled' : ''}>&lsaquo;</button>`;
+    const maxBtns = 5;
+    let startPage = Math.max(0, triagePage - Math.floor(maxBtns / 2));
+    let endPage = Math.min(totalPages, startPage + maxBtns);
+    if (endPage - startPage < maxBtns) startPage = Math.max(0, endPage - maxBtns);
+    for (let i = startPage; i < endPage; i++) {
+      paginationHtml += `<button class="pagination-btn ${i === triagePage ? 'active' : ''}" onclick="triageGoTo(${i})">${i + 1}</button>`;
+    }
+    paginationHtml += `<button class="pagination-btn" onclick="triageGoTo(${triagePage + 1})" ${triagePage >= totalPages - 1 ? 'disabled' : ''}>&rsaquo;</button>`;
+    paginationHtml += `<button class="pagination-btn" onclick="triageGoTo(${totalPages - 1})" ${triagePage >= totalPages - 1 ? 'disabled' : ''}>&raquo;</button>`;
+    pagination.innerHTML = paginationHtml;
+  } else {
+    pagination.classList.add('hidden');
+  }
+}
+
+function triageGoTo(page) {
+  triagePage = Math.max(0, page);
+  renderTriagePage();
+  document.getElementById('panel-triage').scrollIntoView({behavior:'smooth'});
+}
+
+function toggleNewCase(msgId) {
+  const section = document.getElementById('newcase-section-' + msgId);
+  if (section) section.classList.toggle('hidden');
+}
+
+function toggleTriageBody(msgId) {
+  const bodyEl = document.getElementById('body-' + msgId);
+  const toggleBtn = document.getElementById('body-toggle-' + msgId);
+  const item = allTriageItems.find(e => e.provider_message_id === msgId);
+  if (!item || !bodyEl || !toggleBtn) return;
+  if (toggleBtn.textContent === 'Mehr anzeigen') {
+    bodyEl.textContent = item.body_text;
+    toggleBtn.textContent = 'Weniger anzeigen';
+  } else {
+    bodyEl.textContent = item.body_text.substring(0, 250) + '...';
+    toggleBtn.textContent = 'Mehr anzeigen';
+  }
 }
 
 // Doppelklick-Schutz: disabled Buttons in der Triage-Card waehrend Request laeuft
@@ -302,9 +441,9 @@ async function loadOutgoing() {
         <div class="flex justify-between items-start mb-2">
           <div>
             <span class="text-gray-400 text-sm">An:</span> <span class="font-semibold">${esc(e.to)}</span>
-            <span class="text-gray-400 text-sm ml-3">${e.logged_at || ''}</span>
+            <span class="text-gray-400 text-sm ml-3" title="${e.logged_at || ''}">${formatTime(e.logged_at)}</span>
           </div>
-          ${e.dry_run ? '<span class="badge badge-purple">DRY-RUN</span>' : '<span class="badge badge-green">GESENDET</span>'}
+          ${e.dry_run ? '<span class="badge badge-purple" title="E-Mail wurde nicht tatsaechlich gesendet">DRY-RUN</span>' : '<span class="badge badge-green">GESENDET</span>'}
         </div>
         <div class="font-medium mb-2">${esc(e.subject)}</div>
         <div class="text-sm text-gray-600 whitespace-pre-line">${esc(e.body_text)}</div>
@@ -322,16 +461,15 @@ async function loadCases() {
   document.getElementById('cases-list').innerHTML = allCases.map(c => `
     <div class="card cursor-pointer hover:shadow-md transition" onclick="openCase('${c.case_id}')">
       <div class="flex justify-between items-start mb-1">
-        <div>
-          <span class="font-mono text-sm text-gray-500">${c.case_id}</span>
+        <div class="flex items-center gap-2">
           ${statusBadge(c.status)}
         </div>
-        <span class="text-sm text-gray-400">${c.last_status_change ? c.last_status_change.substring(0,16) : ''}</span>
+        <span class="text-sm text-gray-400" title="${c.last_status_change || ''}">${formatTime(c.last_status_change)}</span>
       </div>
       <div class="font-semibold text-lg">${esc(c.applicant_name || 'Unbekannt')}</div>
       <div class="text-sm text-gray-500">${esc(c.partner_email || '')}</div>
       <div class="mt-2 flex gap-4 text-xs text-gray-500">
-        ${c.missing_financing.length > 0 ? `<span class="text-red-500">Fehlende Daten: ${c.missing_financing.join(', ')}</span>` : ''}
+        ${c.missing_financing.length > 0 ? `<span class="text-red-500">Fehlende Daten: ${c.missing_financing.map(f => FIELD_LABELS[f] || f).join(', ')}</span>` : ''}
         ${c.missing_docs_count > 0 ? `<span class="text-yellow-600">${c.missing_docs_count} Dokumente fehlen</span>` : '<span class="text-green-600">Docs vollstaendig</span>'}
         ${c.overrides_applied.length > 0 ? `<span class="text-purple-600">${c.overrides_applied.length} Override(s)</span>` : ''}
       </div>
@@ -398,6 +536,57 @@ function flattenObj(obj, prefix='') {
   return out;
 }
 
+// ── Document Table with dedup + pagination ──
+const DOCS_PER_PAGE = 20;
+let docsExpanded = false;
+
+function renderDocTable(docs) {
+  // Deduplicate: group by file_name, keep latest
+  const seen = new Map();
+  const duplicates = new Map();
+  for (const d of docs) {
+    const key = d.file_name;
+    if (seen.has(key)) {
+      duplicates.set(key, (duplicates.get(key) || 1) + 1);
+      // Keep the one with latest processed_at
+      const existing = seen.get(key);
+      if (d.processed_at > (existing.processed_at || '')) {
+        seen.set(key, d);
+      }
+    } else {
+      seen.set(key, d);
+    }
+  }
+  const uniqueDocs = Array.from(seen.values());
+  const totalDuplicates = docs.length - uniqueDocs.length;
+
+  const displayDocs = docsExpanded ? uniqueDocs : uniqueDocs.slice(0, DOCS_PER_PAGE);
+  const hasMore = uniqueDocs.length > DOCS_PER_PAGE;
+
+  let html = '';
+  if (totalDuplicates > 0) {
+    html += `<div class="text-xs text-gray-400 mb-2">${uniqueDocs.length} einzigartige Dokumente (${totalDuplicates} Duplikate ausgeblendet)</div>`;
+  }
+  html += `<table class="w-full text-sm">
+    <thead><tr class="text-left text-gray-400"><th class="pb-2">Datei</th><th class="pb-2">Typ</th><th class="pb-2">Status</th><th class="pb-2">Datum</th></tr></thead>
+    <tbody>${displayDocs.map(d => {
+      const dupCount = duplicates.get(d.file_name);
+      return `<tr class="border-t hover:bg-gray-50">
+        <td class="py-1">${esc(d.file_name)}${dupCount ? ` <span class="text-xs text-gray-400">(${dupCount}x)</span>` : ''}</td>
+        <td class="py-1">${esc(d.doc_type)}</td>
+        <td class="py-1"><span class="badge ${d.processing_status==='completed'?'badge-green':'badge-red'}">${d.processing_status === 'completed' ? 'OK' : d.processing_status}</span></td>
+        <td class="py-1 text-gray-400" title="${d.processed_at || ''}">${formatTime(d.processed_at)}</td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table>`;
+  if (hasMore && !docsExpanded) {
+    html += `<button onclick="docsExpanded=true;openCase(currentCaseId)" class="mt-2 text-sm text-blue-600 hover:text-blue-800 underline">Alle ${uniqueDocs.length} Dokumente anzeigen</button>`;
+  } else if (docsExpanded && hasMore) {
+    html += `<button onclick="docsExpanded=false;openCase(currentCaseId)" class="mt-2 text-sm text-blue-600 hover:text-blue-800 underline">Weniger anzeigen</button>`;
+  }
+  return html;
+}
+
 // ── Case Detail ──
 async function openCase(caseId) {
   currentCaseId = caseId;
@@ -428,7 +617,7 @@ async function openCase(caseId) {
           ${editableField(caseId, 'partner_email', c.partner_email, 'case', 'Partner E-Mail')}
         </div>
         <div class="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm mt-3 pt-3 border-t">
-          <div><span class="text-gray-400">Letzte Aenderung</span><br>${c.last_status_change ? c.last_status_change.substring(0,16) : '-'}</div>
+          <div><span class="text-gray-400">Letzte Aenderung</span><br><span title="${c.last_status_change || ''}">${formatTime(c.last_status_change)}</span></div>
           <div><span class="text-gray-400">OneDrive</span><br>${c.onedrive_web_url
             ? `<a href="${esc(c.onedrive_web_url)}" target="_blank" class="text-blue-600 hover:underline">Ordner oeffnen ↗</a>`
             : c.onedrive_folder_id ? '<span class="text-green-600">Vorhanden</span>' : '<span class="text-gray-400">Kein Ordner</span>'}</div>
@@ -527,7 +716,7 @@ async function openCase(caseId) {
       <!-- Finanzierungsdaten (editierbar) -->
       <div class="card mb-4">
         <h3 class="font-semibold mb-3">Finanzierungsdaten</h3>
-        ${keyFields.map(f => editableField(caseId, f, effectiveView[f] || effectiveView['property_data.'+f] || effectiveView['financing_data.'+f], 'answers', f.replace(/_/g, ' '))).join('')}
+        ${keyFields.map(f => editableField(caseId, f, effectiveView[f] || effectiveView['property_data.'+f] || effectiveView['financing_data.'+f], 'answers', FIELD_LABELS[f] || f.replace(/_/g, ' '))).join('')}
       </div>
 
       <!-- Alle Facts (editierbar) -->
@@ -574,16 +763,8 @@ async function openCase(caseId) {
             <button onclick="processGoogleDrive('${caseId}')" class="text-xs bg-green-50 text-green-600 hover:bg-green-100 px-3 py-1 rounded border border-green-200">Google Drive importieren</button>
           </div>
         </div>
-        ${c.documents.length > 0 ? `
-          <table class="w-full text-sm">
-            <thead><tr class="text-left text-gray-400"><th>Datei</th><th>Typ</th><th>Status</th><th>Datum</th></tr></thead>
-            <tbody>${c.documents.map(d => `
-              <tr class="border-t"><td>${esc(d.file_name)}</td><td>${esc(d.doc_type)}</td>
-              <td><span class="badge ${d.processing_status==='completed'?'badge-green':'badge-red'}">${d.processing_status}</span></td>
-              <td class="text-gray-400">${d.processed_at || ''}</td></tr>
-            `).join('')}</tbody>
-          </table>
-        ` : '<p class="text-gray-400 text-sm">Keine Dokumente vorhanden. Dateien im OneDrive-Ordner ablegen und "Dokumente scannen" klicken.</p>'}
+        ${c.documents.length > 0 ? renderDocTable(c.documents)
+        : '<p class="text-gray-400 text-sm">Keine Dokumente vorhanden. Dateien im OneDrive-Ordner ablegen und "Dokumente scannen" klicken.</p>'}
       </div>
 
       <!-- Incoming E-Mails -->
@@ -616,7 +797,7 @@ async function openCase(caseId) {
           <div class="mt-2 space-y-1 text-sm">
             ${(c.audit_log || []).reverse().map(a => `
               <div class="flex gap-3 text-gray-600">
-                <span class="text-gray-400 font-mono text-xs">${(a.ts||'').substring(0,16)}</span>
+                <span class="text-gray-400 font-mono text-xs" title="${a.ts || ''}">${formatTime(a.ts)}</span>
                 <span>${esc(a.event)}${a.status ? ' &rarr; '+a.status : ''}${a.source ? ' ('+a.source+')' : ''}${a.actor ? ' ['+a.actor+']' : ''}</span>
               </div>
             `).join('')}
@@ -648,7 +829,7 @@ async function loadCaseOutgoing(caseId) {
           <div class="flex justify-between items-center mb-1">
             <div>
               <span class="text-gray-400 text-xs">An:</span> <span class="text-sm font-medium">${esc(e.to)}</span>
-              <span class="text-gray-400 text-xs ml-2">${e.logged_at || ''}</span>
+              <span class="text-gray-400 text-xs ml-2" title="${e.logged_at || ''}">${formatTime(e.logged_at)}</span>
             </div>
             ${e.dry_run ? '<span class="badge badge-purple">DRY-RUN</span>' : '<span class="badge badge-green">GESENDET</span>'}
           </div>
@@ -720,8 +901,8 @@ function buildActionButtons(caseId, readiness, status) {
     <div class="flex gap-3 flex-wrap items-start">
       ${freigabeBtn}
       ${importBtn}
-      <button onclick="caseAction('${caseId}','WAIT_FOR_DOCS')" class="bg-yellow-500 text-white px-4 py-2 rounded hover:bg-yellow-600">WAIT_FOR_DOCS</button>
-      <button onclick="caseAction('${caseId}','RECHECK')" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">Recheck</button>
+      <button onclick="caseAction('${caseId}','WAIT_FOR_DOCS')" class="bg-yellow-500 text-white px-4 py-2 rounded hover:bg-yellow-600" title="Status auf 'Warte auf Dokumente' setzen">Warte auf Dokumente</button>
+      <button onclick="caseAction('${caseId}','RECHECK')" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700" title="Readiness-Check erneut ausfuehren">Erneut pruefen</button>
     </div>
     ${totalMissing > 0 ? `
     <div class="mt-2 p-2 bg-amber-50 border border-amber-200 rounded text-sm text-amber-800">
