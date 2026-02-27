@@ -2669,6 +2669,55 @@ async def clear_dry_run_log():
     return {"cleared": True, "note": "SeaTable email_test_log bitte manuell in SeaTable leeren"}
 
 
+@app.get("/admin/inspect")
+async def admin_inspect():
+    """Gibt einen Ueberblick ueber alle DB-Inhalte. Nur fuer Development."""
+    import db_postgres as _pg
+    result = {}
+    with _pg._get_conn() as conn:
+        with conn.cursor() as cur:
+            # Cases
+            cur.execute("SELECT case_id, applicant_name, partner_email, status, facts_extracted, answers_user, manual_overrides, onedrive_folder_id, last_status_change FROM fin_cases ORDER BY created_at DESC")
+            cols = [d[0] for d in cur.description]
+            cases = [dict(zip(cols, row)) for row in cur.fetchall()]
+            for c in cases:
+                for k in ["facts_extracted", "answers_user", "manual_overrides"]:
+                    if isinstance(c[k], str):
+                        try:
+                            import json as _j
+                            c[k] = _j.loads(c[k])
+                        except Exception:
+                            pass
+            result["cases"] = cases
+
+            # Documents per case
+            cur.execute("SELECT \"caseId\", doc_type, file_name, processing_status FROM fin_documents ORDER BY \"caseId\", processed_at DESC")
+            cols = [d[0] for d in cur.description]
+            docs = [dict(zip(cols, row)) for row in cur.fetchall()]
+            # Group by case
+            docs_by_case = {}
+            for d in docs:
+                cid = d["caseId"]
+                if cid not in docs_by_case:
+                    docs_by_case[cid] = {"total": 0, "by_type": {}}
+                docs_by_case[cid]["total"] += 1
+                t = d["doc_type"] or "Sonstiges"
+                docs_by_case[cid]["by_type"][t] = docs_by_case[cid]["by_type"].get(t, 0) + 1
+            result["documents_by_case"] = docs_by_case
+
+            # Emails
+            cur.execute("SELECT provider_message_id, from_email, subject, processing_result, case_id, matched_by FROM processed_emails ORDER BY processed_at DESC LIMIT 50")
+            cols = [d[0] for d in cur.description]
+            result["recent_emails"] = [dict(zip(cols, row)) for row in cur.fetchall()]
+
+            # Outgoing
+            cur.execute("SELECT \"to\", subject, logged_at, dry_run FROM email_test_log ORDER BY logged_at DESC LIMIT 20")
+            cols = [d[0] for d in cur.description]
+            result["outgoing_emails"] = [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    return result
+
+
 @app.post("/admin/clear-db")
 async def admin_clear_db():
     """Loescht ALLE Daten aus allen Tabellen. Nur fuer Development/Testing."""
