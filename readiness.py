@@ -185,7 +185,7 @@ def _doc_age_ok(doc: dict, max_age_days: Optional[int]) -> bool:
     """Prüft ob Dokument nicht zu alt ist"""
     if not max_age_days:
         return True
-    analyzed = doc.get("analyzed_at") or doc.get("meta", {}) and doc.get("meta", {}).get("doc_date")
+    analyzed = doc.get("analyzed_at") or (doc.get("meta") or {}).get("doc_date")
     if not analyzed:
         return True  # Kein Datum → nicht prüfbar → akzeptieren
     try:
@@ -255,6 +255,7 @@ def check_readiness(case_id: str) -> dict:
     stale_docs = []
     warnings = []
     overrides_applied = []
+    total_doc_checks = 0  # Zählt alle erforderlichen Doc-Typen für completeness
 
     # ──────────────────────────────────────────
     # 1. Pflichtfelder Finanzierung
@@ -301,6 +302,9 @@ def check_readiness(case_id: str) -> dict:
         Berechnet required_count korrekt per person_count * per_person.
         KEIN Loop - wird genau 1x pro Dokumenttyp aufgerufen.
         """
+        nonlocal total_doc_checks
+        total_doc_checks += 1
+
         # Alle Dokumente inkl. Aliase sammeln
         docs = _count_docs_with_aliases(docs_index, doc_type)
 
@@ -411,9 +415,11 @@ def check_readiness(case_id: str) -> dict:
     is_complete = status in ("READY_FOR_IMPORT", "AWAITING_BROKER_CONFIRMATION")
 
     # Completeness Prozent (fuer Dashboard)
-    total_checks = len(REQUIRED_FINANCING_KEYS) + len(missing_docs) + (len(REQUIRED_FINANCING_KEYS) - len(missing_financing))
-    passed_checks = total_checks - len(missing_financing) - len(missing_docs)
-    completeness_percent = round((passed_checks / max(total_checks, 1)) * 100)
+    # total = Finanzierungsfelder + alle geprüften Dokumenttypen
+    total_checks = len(REQUIRED_FINANCING_KEYS) + total_doc_checks
+    failed_checks = len(missing_financing) + len(missing_docs) + len(stale_docs)
+    passed_checks = total_checks - failed_checks
+    completeness_percent = max(0, min(100, round((passed_checks / max(total_checks, 1)) * 100)))
 
     result = {
         "status": status,

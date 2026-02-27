@@ -267,6 +267,7 @@ def process_google_drive_links(
     onedrive_folder_id = case.get("onedrive_folder_id", "") if case else ""
 
     # Wenn noch kein OneDrive-Ordner, kurz warten (n8n erstellt ihn parallel)
+    # time.sleep ist OK weil diese Funktion immer via asyncio.to_thread() aufgerufen wird
     if not onedrive_folder_id:
         import time
         logger.info(f"[{case_id}] Kein OneDrive-Ordner – warte 15s auf n8n Setup...")
