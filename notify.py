@@ -161,24 +161,34 @@ WICHTIG:
 - Nenne den Antragsteller beim Namen
 - Sei konkret aber nicht technisch
 - Deutsch, professionell, freundlich
-- Unterschreibe mit "Mit freundlichen Grüßen" OHNE Firmennamen (wird automatisch ergaenzt)"""
+- KEINE Signatur, KEIN "Mit freundlichen Grüßen", KEIN Name am Ende (wird automatisch ergaenzt)
+- Schreibe NUR den E-Mail-Body, NICHTS anderes"""
         prompt = f"""Antragsteller: {applicant_name}
 
 Bitte erfrage folgende fehlenden Informationen/Dokumente:
 {chr(10).join(case_summary)}
 
-Schreibe eine komplette E-Mail (nur Body, ohne Betreff). Beginne mit einer freundlichen Begrüßung.
-Beziehe dich auf den Antragsteller "{applicant_name}" beim Namen, NICHT auf eine Case-ID."""
+Schreibe eine komplette E-Mail (nur Body, ohne Betreff, ohne Signatur). Beginne mit einer freundlichen Begrüßung.
+Beziehe dich auf den Antragsteller "{applicant_name}" beim Namen, NICHT auf eine Case-ID.
+WICHTIG: Beende den Text VOR der Grußformel. Schreibe NICHT "Mit freundlichen Grüßen" oder einen Namen/Position."""
     else:
-        system = """Du bist ein internes System für Baufinanzierung.
-Schreibe eine prägnante interne Nachricht an den Backoffice-Mitarbeiter."""
-        prompt = f"""Case: {case_id}
-Antragsteller: {applicant_name}
+        system = """Du bist ein internes Backoffice-System für Baufinanzierung bei Alexander Heil Consulting.
+Schreibe eine kurze, sachliche interne Info-E-Mail an das Backoffice-Team.
+WICHTIG:
+- Verwende KEINE Case-IDs oder Referenznummern im Text
+- Nenne den Antragsteller beim Namen
+- Liste fehlende Punkte als Aufzählung auf
+- KEINE Signatur, KEIN "[Dein Name]", KEINE Platzhalter
+- KEINE Handlungsanweisungen wie "Bitte kümmern Sie sich" – einfach nur auflisten was fehlt
+- Kurz und sachlich, max 10 Zeilen"""
+        prompt = f"""Antragsteller: {applicant_name}
 
-Folgende Punkte benötigen Ihre Aufmerksamkeit:
+Folgende Punkte sind noch offen:
 {chr(10).join(case_summary)}
 
-Schreibe eine kurze interne Nachricht mit konkreten Handlungsempfehlungen."""
+Schreibe eine kurze interne Info (nur Body, ohne Betreff, ohne Signatur).
+Beginne mit "Hallo," und liste danach nur auf was fehlt.
+WICHTIG: KEINE Signatur, KEIN Name, KEINE Platzhalter wie [Dein Name] am Ende."""
 
     try:
         resp = _get_openai().chat.completions.create(
@@ -231,41 +241,84 @@ def send_partner_questions(case_id: str, partner_email: str, readiness_result: d
 <p>Mit freundlichen Grüßen<br>Alexander Heil Finanzierung</p>
 </body></html>"""
 
-    subject_name = applicant_name or case_id
+    subject_name = applicant_name or "Ihre Anfrage"
     _send_email(
         to=partner_email,
-        subject=f"Rückfrage zu Ihrer Finanzierungsanfrage - {subject_name}",
+        subject=f"Fehlende Unterlagen – Finanzierungsanfrage {subject_name}",
         html_body=html_body,
         text_body=body,
     )
 
 
 def send_broker_questions(case_id: str, readiness_result: dict, effective_view: dict):
-    """Sendet interne Rückfrage an Broker/Backoffice"""
+    """Sendet interne Info an Broker/Backoffice über fehlende Unterlagen"""
     applicant_name = effective_view.get("applicant_name", "")
-    body = _generate_questions_with_ai(
-        case_id=case_id,
-        missing_financing=readiness_result.get("missing_financing", []),
-        missing_docs=readiness_result.get("missing_docs", []),
-        stale_docs=readiness_result.get("stale_docs", []),
-        effective_view=effective_view,
-        recipient="broker",
-    )
 
-    if not body:
+    # Strukturierte Liste statt GPT-Freitext für Broker
+    missing_fin = readiness_result.get("missing_financing", [])
+    missing_docs = readiness_result.get("missing_docs", [])
+    stale_docs = readiness_result.get("stale_docs", [])
+
+    FINANCING_LABELS = {
+        "purchase_price": "Kaufpreis",
+        "loan_amount": "Darlehenssumme",
+        "equity_to_use": "Eigenkapital",
+        "object_type": "Objektart",
+        "usage": "Nutzungsart",
+    }
+
+    display_name = applicant_name or "Unbekannt"
+
+    lines_html = []
+    if missing_fin:
+        labels = [FINANCING_LABELS.get(f, f) for f in missing_fin]
+        lines_html.append("<strong>Fehlende Finanzierungsdaten:</strong><ul>")
+        lines_html.extend(f"<li>{l}</li>" for l in labels)
+        lines_html.append("</ul>")
+
+    if missing_docs:
+        lines_html.append("<strong>Fehlende Dokumente:</strong><ul>")
+        for d in missing_docs:
+            if isinstance(d, dict):
+                dtype = d.get("type", "?")
+                req = d.get("required", 1)
+                found = d.get("found", 0)
+                lines_html.append(f"<li>{dtype} ({found}/{req})</li>")
+            else:
+                lines_html.append(f"<li>{d}</li>")
+        lines_html.append("</ul>")
+
+    if stale_docs:
+        lines_html.append("<strong>Veraltete Dokumente:</strong><ul>")
+        for d in stale_docs:
+            dtype = d.get("type", "?") if isinstance(d, dict) else str(d)
+            lines_html.append(f"<li>{dtype}</li>")
+        lines_html.append("</ul>")
+
+    if not lines_html:
         return
 
-    display_name = applicant_name or case_id
     html_body = f"""<html><body>
-<h3>Interne Rückfrage: {display_name}</h3>
-<p>{body.replace(chr(10), '<br>')}</p>
+<p>Hallo,</p>
+<p>für den Antrag von <strong>{display_name}</strong> fehlen noch folgende Unterlagen:</p>
+{"".join(lines_html)}
 </body></html>"""
+
+    text_lines = [f"Antrag: {display_name}\n"]
+    if missing_fin:
+        text_lines.append("Fehlende Daten: " + ", ".join(FINANCING_LABELS.get(f, f) for f in missing_fin))
+    if missing_docs:
+        for d in missing_docs:
+            if isinstance(d, dict):
+                text_lines.append(f"- {d.get('type', '?')} ({d.get('found',0)}/{d.get('required',1)})")
+            else:
+                text_lines.append(f"- {d}")
 
     _send_email(
         to=BROKER_EMAIL,
-        subject=f"[INTERN] Rückfrage - {display_name}",
+        subject=f"Offene Unterlagen – {display_name}",
         html_body=html_body,
-        text_body=body,
+        text_body="\n".join(text_lines),
     )
 
 
@@ -418,42 +471,20 @@ Wir haben noch keine Rückmeldung zu unserer vorherigen Anfrage erhalten.</em></
 <p>Mit freundlichen Grüßen<br>Alexander Heil Finanzierung</p>
 </body></html>"""
 
-        subject_name = applicant_name or case_id
+        subject_name = applicant_name or "Ihre Anfrage"
         _send_email(
             to=partner_email,
-            subject=f"{prefix}Rückfrage zu Ihrer Finanzierungsanfrage - {subject_name}",
+            subject=f"{prefix}Fehlende Unterlagen – Finanzierungsanfrage {subject_name}",
             html_body=html_body,
             text_body=body_with_note,
         )
         logger.info(f"Reminder #{reminder_count} gesendet an Partner {partner_email} für Case {case_id}")
 
     elif target == "broker":
-        body = _generate_questions_with_ai(
-            case_id=case_id,
-            missing_financing=readiness_result.get("missing_financing", []),
-            missing_docs=readiness_result.get("missing_docs", []),
-            stale_docs=readiness_result.get("stale_docs", []),
-            effective_view=view,
-            recipient="broker",
-        )
-        if not body:
-            logger.info(f"Reminder für {case_id}: kein Body generiert, überspringe")
-            return
-
-        display_name = view.get("applicant_name") or case_id
-        html_body = f"""<html><body>
-<h3>{prefix}Interne Rückfrage: {display_name}</h3>
-<p>{body.replace(chr(10), '<br>')}</p>
-<p style="color: #666; font-size: 0.9em;">
-<em>Automatische Erinnerung Nr. {reminder_count}</em></p>
-</body></html>"""
-
-        _send_email(
-            to=BROKER_EMAIL,
-            subject=f"{prefix}[INTERN] Rückfrage - {display_name}",
-            html_body=html_body,
-            text_body=body,
-        )
+        # Broker-Reminder: gleiche strukturierte Liste wie send_broker_questions
+        display_name = view.get("applicant_name") or "Unbekannt"
+        # Reuse send_broker_questions logic but with reminder prefix
+        send_broker_questions(case_id, readiness_result, view)
         logger.info(f"Reminder #{reminder_count} gesendet an Broker für Case {case_id}")
 
     else:
