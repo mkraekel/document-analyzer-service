@@ -202,6 +202,66 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> tuple[str, int]:
         return "", 0
 
 
+# Filename-Keywords → doc_type Mapping (Fallback wenn GPT "Sonstiges" sagt)
+FILENAME_DOC_TYPE_HINTS = {
+    "selbstauskunft": "Selbstauskunft",
+    "schufa": "Selbstauskunft",
+    "gehaltsnachweis": "Gehaltsnachweis",
+    "gehaltsabrechnung": "Gehaltsnachweis",
+    "lohnabrechnung": "Gehaltsnachweis",
+    "entgeltnachweis": "Gehaltsnachweis",
+    "entgeltabrechnung": "Gehaltsnachweis",
+    "kontoauszug": "Kontoauszug",
+    "kontoauszüge": "Kontoauszug",
+    "ausweis": "Ausweiskopie",
+    "personalausweis": "Ausweiskopie",
+    "reisepass": "Ausweiskopie",
+    "renteninfo": "Renteninfo",
+    "renteninformation": "Renteninfo",
+    "rentenauskunft": "Renteninfo",
+    "steuerbescheid": "Steuerbescheid",
+    "steuererklärung": "Steuererklärung",
+    "steuererklaerung": "Steuererklärung",
+    "einkommensteuer": "Steuererklärung",
+    "lohnsteuerbescheinigung": "Lohnsteuerbescheinigung",
+    "grundbuch": "Grundbuch",
+    "grundbuchauszug": "Grundbuch",
+    "exposé": "Exposé",
+    "expose": "Exposé",
+    "energieausweis": "Energieausweis",
+    "energiepass": "Energieausweis",
+    "baubeschreibung": "Baubeschreibung",
+    "grundriss": "Grundriss",
+    "teilungserklärung": "Teilungserklärung",
+    "teilungserklaerung": "Teilungserklärung",
+    "aufteilungsplan": "Teilungserklärung",
+    "gemeinschaftsordnung": "Teilungserklärung",
+    "wohnflächenberechnung": "Wohnflächenberechnung",
+    "flächenberechnung": "Wohnflächenberechnung",
+    "eigenkapitalnachweis": "Eigenkapitalnachweis",
+    "depotauszug": "Depotnachweis",
+    "depotnachweis": "Depotnachweis",
+    "wertpapier": "Depotnachweis",
+    "bausparvertrag": "Bausparvertrag",
+    "kaufvertrag": "Kaufvertrag",
+    "mietvertrag": "Mietvertrag",
+    "bwa": "BWA",
+    "jahresabschluss": "Jahresabschluss",
+    "krankenversicherung": "Nachweis Krankenversicherung",
+    "handelsregister": "Handelsregisterauszug",
+}
+
+
+def _filename_fallback_doc_type(filename: str) -> Optional[str]:
+    """Versucht doc_type aus Dateiname zu erkennen (Fallback wenn GPT Sonstiges sagt)."""
+    name_lower = filename.lower().rsplit(".", 1)[0]  # Extension entfernen
+    # Direkte Keywords
+    for keyword, doc_type in FILENAME_DOC_TYPE_HINTS.items():
+        if keyword in name_lower:
+            return doc_type
+    return None
+
+
 def analyze_with_gpt4o(file_bytes: bytes, mime_type: str, filename: str) -> dict:
     """Analysiert Dokument mit GPT-4o Vision"""
 
@@ -229,13 +289,17 @@ def analyze_with_gpt4o(file_bytes: bytes, mime_type: str, filename: str) -> dict
             }]
             model = "gpt-4o-mini"  # Günstiger für Text-Only
         else:
-            # PDF ohne Text (gescannt) - braucht OCR/Bildkonvertierung
-            logger.warning(f"PDF {filename} hat keinen extrahierbaren Text - Scan-Dokument?")
+            # PDF ohne Text (gescannt) - Filename-Fallback versuchen
+            fallback_type = _filename_fallback_doc_type(filename)
+            if fallback_type:
+                logger.info(f"PDF {filename} hat keinen Text, aber Filename-Fallback: {fallback_type}")
+            else:
+                logger.warning(f"PDF {filename} hat keinen extrahierbaren Text - Scan-Dokument?")
             return {
-                "doc_type": "Sonstiges",
-                "confidence": "low",
-                "error": "PDF enthält keinen extrahierbaren Text. Bitte als Bild hochladen.",
-                "meta": {"requires_ocr": True}
+                "doc_type": fallback_type or "Sonstiges",
+                "confidence": "low" if not fallback_type else "medium",
+                "error": "PDF enthält keinen extrahierbaren Text. Bitte als Bild hochladen." if not fallback_type else None,
+                "meta": {"requires_ocr": True, "filename_fallback": bool(fallback_type)}
             }
     else:
         # Bilder: Vision-Analyse
@@ -271,15 +335,28 @@ def analyze_with_gpt4o(file_bytes: bytes, mime_type: str, filename: str) -> dict
         elif "```" in result_text:
             result_text = result_text.split("```")[1].split("```")[0]
 
-        return json.loads(result_text.strip())
+        result = json.loads(result_text.strip())
+
+        # Filename-Fallback: wenn GPT "Sonstiges" sagt, aber Dateiname eindeutig ist
+        if result.get("doc_type") == "Sonstiges":
+            fallback = _filename_fallback_doc_type(filename)
+            if fallback:
+                logger.info(f"GPT sagte Sonstiges für {filename}, Filename-Fallback → {fallback}")
+                result["doc_type"] = fallback
+                result["meta"] = result.get("meta") or {}
+                result["meta"]["filename_fallback"] = True
+
+        return result
 
     except json.JSONDecodeError as e:
         logger.error(f"JSON Parse Error: {e}")
+        fallback = _filename_fallback_doc_type(filename)
         return {
-            "doc_type": "Sonstiges",
+            "doc_type": fallback or "Sonstiges",
             "confidence": "low",
             "error": "JSON Parse Error",
-            "raw_response": result_text[:500]
+            "raw_response": result_text[:500],
+            "meta": {"filename_fallback": bool(fallback)}
         }
     except Exception as e:
         logger.error(f"OpenAI API Error: {e}")

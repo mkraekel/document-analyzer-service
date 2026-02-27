@@ -311,12 +311,26 @@ def update_onedrive_folder(case_id: str, folder_id: str, web_url: str = None):
 
 
 def build_docs_index(case_id: str) -> dict:
-    """Dokumente aus fin_documents laden und nach Typ indexieren"""
+    """Dokumente aus fin_documents laden und nach Typ indexieren.
+    Dedupliziert nach Dateiname (behält neueste Version)."""
     docs = db.search_rows("fin_documents", "caseId", case_id)
-    index = {}
+
+    # Deduplizieren: pro Dateiname nur den neuesten Eintrag behalten
+    seen_filenames = {}  # filename → doc (mit neuestem processed_at)
     for doc in docs:
         if doc.get("processing_status") != "completed":
             continue
+        fname = doc.get("file_name", "")
+        existing = seen_filenames.get(fname)
+        if existing:
+            # Behalte den neueren
+            if (doc.get("processed_at") or "") > (existing.get("processed_at") or ""):
+                seen_filenames[fname] = doc
+        else:
+            seen_filenames[fname] = doc
+
+    index = {}
+    for doc in seen_filenames.values():
         doc_type = doc.get("doc_type", "Sonstiges")
         if doc_type not in index:
             index[doc_type] = []
