@@ -116,13 +116,24 @@ EXTRACTION_PROMPT = """Analysiere dieses Dokument und extrahiere alle relevanten
 
 Dokumenttyp erkennen aus: {doc_types}
 
+WICHTIGE KLASSIFIZIERUNGS-HINWEISE:
+- Reisepass, Personalausweis, Aufenthaltstitel → "Ausweiskopie"
+- Gehaltsabrechnung, Entgeltnachweis, Entgeltabrechnung, Lohnabrechnung, Verdienstbescheinigung → "Gehaltsnachweis"
+- Renteninformation, Rentenauskunft → "Renteninfo"
+- Grundbuchauszug, Grundbuchblatt → "Grundbuch"
+- Immobilienexposé, Verkaufsexposé, Objektbeschreibung mit Kaufpreis → "Exposé"
+- Finanzstatus, Vermögensaufstellung, Depotauszug, Sparkontoauszug → "Eigenkapitalnachweis"
+- Wohnungsgrundriss, Grundrissplan, Grundrisszeichnung → "Grundriss"
+- Energiepass → "Energieausweis"
+- Verwende "Sonstiges" NUR wenn das Dokument wirklich in KEINEN der obigen Typen passt.
+
 Extrahiere je nach Dokumenttyp:
 
-Für Ausweise:
+Für Ausweise (inkl. Reisepass, Personalausweis):
 - Vorname, Nachname, Geburtsdatum, Geburtsort, Nationalität
 - Ausweisnummer, Gültig bis, Ausstellungsbehörde
 
-Für Gehaltsnachweise:
+Für Gehaltsnachweise (inkl. Entgeltnachweis, Gehaltsabrechnung):
 - Arbeitgeber, Brutto, Netto, Monat/Jahr
 - Steuerklasse, Sozialversicherungsbeiträge
 
@@ -134,13 +145,13 @@ Für Selbstauskunft:
 - Alle persönlichen Daten, Adresse, Kontaktdaten
 - Familienstatus, Kinder, Beruf, Einkommen
 
-Für Immobilien-Dokumente:
+Für Immobilien-Dokumente (Exposé, Grundbuch, etc.):
 - Adresse, Wohnfläche, Baujahr, Objekttyp
 - Kaufpreis, Grundstücksgröße
 
 Antworte NUR mit validem JSON in diesem Format:
 {{
-  "doc_type": "erkannter Typ",
+  "doc_type": "erkannter Typ (MUSS einer der vorgegebenen Typen sein!)",
   "confidence": "high|medium|low",
   "meta": {{
     "doc_date": "YYYY-MM-DD oder null",

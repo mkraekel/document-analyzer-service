@@ -67,6 +67,47 @@ DOCS_REQUIRED_PROPERTY = {
     "Energieausweis": {"count": 1, "max_age_days": None},
 }
 
+# ============================================================
+# DOC-TYPE ALIASE
+# Wenn GPT einen Dokumenttyp anders benennt als erwartet,
+# wird hier das Mapping definiert. Key = erwarteter Typ,
+# Values = alternative Bezeichnungen die GPT verwenden koennte.
+# ============================================================
+DOC_TYPE_ALIASES: dict[str, list[str]] = {
+    "Gehaltsnachweis": [
+        "Gehaltsabrechnung", "Entgeltnachweis", "Entgeltabrechnung",
+        "Lohn/Gehaltsabrechnung", "Lohnabrechnung", "Verdienstbescheinigung",
+        "Bezügemitteilung",
+    ],
+    "Ausweiskopie": [
+        "Reisepass", "Personalausweis", "Ausweis", "Aufenthaltstitel",
+        "Identitätsdokument",
+    ],
+    "Renteninfo": [
+        "Renteninformation", "Renteninformation 2025", "Rentenauskunft",
+        "Rentenversicherung", "Deutsche Rentenversicherung",
+    ],
+    "Exposé": [
+        "Expose", "Objektexposé", "Immobilienexposé", "Verkaufsexposé",
+    ],
+    "Grundbuch": [
+        "Grundbuchauszug", "Grundbuchblatt", "Grundbucheintrag",
+    ],
+    "Grundriss": [
+        "Wohnungsgrundriss", "Grundrisszeichnung", "Grundrissplan",
+    ],
+    "Eigenkapitalnachweis": [
+        "Finanzstatus", "Vermögensaufstellung", "Depotauszug",
+        "Sparkontoauszug", "Kontostände", "Vermögensstatus",
+    ],
+    "Steuererklärung": [
+        "Einkommensteuererklärung", "Steuererklärung (Anlage)",
+    ],
+    "Energieausweis": [
+        "Energiepass", "Energetischer Ausweis",
+    ],
+}
+
 
 def _get_nested(obj: dict, path: str):
     """Tiefensuche per Punkt-Pfad: 'property_data.purchase_price'"""
@@ -211,14 +252,21 @@ def check_readiness(case_id: str) -> dict:
 
     def check_doc(doc_type: str, req: dict, label: str = None):
         label = label or doc_type
-        docs = docs_index.get(doc_type, [])
+        docs = list(docs_index.get(doc_type, []))
+
+        # Aliase pruefen (z.B. "Gehaltsabrechnung" zaehlt als "Gehaltsnachweis")
+        for alias in DOC_TYPE_ALIASES.get(doc_type, []):
+            docs.extend(docs_index.get(alias, []))
+
         alternative = req.get("alternative")
 
         # Alternative prüfen
         if not docs and alternative:
-            docs = docs_index.get(alternative, [])
-            if docs:
-                doc_type = alternative
+            alt_docs = list(docs_index.get(alternative, []))
+            for alias in DOC_TYPE_ALIASES.get(alternative, []):
+                alt_docs.extend(docs_index.get(alias, []))
+            if alt_docs:
+                docs = alt_docs
 
         # Override: Accept missing?
         if overrides.get(f"accept_missing_{doc_type.lower().replace(' ', '_')}"):
