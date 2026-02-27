@@ -109,27 +109,46 @@ DOC_TYPES = [
     "Nachweis Krankenversicherung", "Private Rentenversicherung", "Private Lebensversicherung",
     "Objektbild Innen", "Objektbild Außen", "Baubeschreibung", "Grundriss",
     "Teilungserklärung", "Wohnflächenberechnung", "Modernisierungsaufstellung",
-    "Grundbuch", "Energieausweis", "Sonstiges"
+    "Grundbuch", "Energieausweis",
+    "Kaufvertrag", "Mietvertrag",
+    "Handelsregisterauszug", "Gesellschaftsvertrag",
+    "Sonstiges"
 ]
 
 EXTRACTION_PROMPT = """Analysiere dieses Dokument und extrahiere alle relevanten Daten.
 
 Dokumenttyp erkennen aus: {doc_types}
 
-WICHTIGE KLASSIFIZIERUNGS-HINWEISE:
-- Reisepass, Personalausweis, Aufenthaltstitel → "Ausweiskopie"
-- Gehaltsabrechnung, Entgeltnachweis, Entgeltabrechnung, Lohnabrechnung, Lohnausweis, Verdienstbescheinigung, Brutto-Netto-Abrechnung → "Gehaltsnachweis"
-- Renteninformation, Rentenauskunft → "Renteninfo"
-- Grundbuchauszug, Grundbuchblatt, GB-Auszug → "Grundbuch"
-- Immobilienexposé, Verkaufsexposé, Objektbeschreibung mit Kaufpreis → "Exposé"
-- Finanzstatus, Vermögensaufstellung, Depotauszug, Sparkontoauszug, Kontouebersicht mit Salden/Guthaben, Bankkonten-Uebersicht → "Eigenkapitalnachweis"
-- Wohnungsgrundriss, Grundrissplan, Grundrisszeichnung → "Grundriss"
-- Energiepass → "Energieausweis"
-- Hausbeschreibung, Hausunterlagen mit technischen Details → "Baubeschreibung"
-- Teilungserklaerung, Aufteilungsplan → "Teilungserklärung"
-- Flurkarte, Lageplan → "Grundriss" (wenn es einen Grundriss/Plan des Objekts zeigt)
-- WICHTIG: Kontoauszuege die MEHRERE Konten mit Salden zeigen = "Eigenkapitalnachweis", NICHT "Kontoauszug". "Kontoauszug" ist NUR fuer einzelne Kontoauszuege mit Transaktionen.
-- Verwende "Sonstiges" NUR wenn das Dokument wirklich in KEINEN der obigen Typen passt.
+WICHTIGE KLASSIFIZIERUNGS-HINWEISE (MUSS beachtet werden):
+- Reisepass, Personalausweis, Aufenthaltstitel, Identitaetsdokument → "Ausweiskopie"
+- Gehaltsabrechnung, Entgeltnachweis, Entgeltabrechnung, Lohnabrechnung, Lohnausweis, Verdienstbescheinigung, Brutto-Netto-Abrechnung, Bezuegemitteilung → "Gehaltsnachweis"
+- Renteninformation, Rentenauskunft, Deutsche Rentenversicherung, Renteninfo 20XX → "Renteninfo"
+- Grundbuchauszug, Grundbuchblatt, GB-Auszug, Amtsgericht Grundbuch → "Grundbuch"
+- Immobilienexposé, Verkaufsexposé, Objektbeschreibung mit Kaufpreis, Immobilienangebot → "Exposé"
+- Finanzstatus, Vermoegensaufstellung, Depotauszug, Depotnachweis, Sparkontoauszug, Kontouebersicht mit Salden/Guthaben, Bankkonten-Uebersicht, Kontosalden, Sparkassenkonten-Uebersicht → "Eigenkapitalnachweis"
+- Wohnungsgrundriss, Grundrissplan, Grundrisszeichnung, Flurkarte, Lageplan → "Grundriss"
+- Energiepass, Energetischer Ausweis, Energieverbrauchsausweis, Energiebedarfsausweis → "Energieausweis"
+- Hausbeschreibung, Hausunterlagen mit technischen Details, Objektbeschreibung (technisch) → "Baubeschreibung"
+- Teilungserklaerung, Aufteilungsplan, Gemeinschaftsordnung → "Teilungserklärung"
+- Wohnflaechenberechnung, Flaechenberechnung, DIN277 Berechnung → "Wohnflächenberechnung"
+- Lohnsteuerbescheinigung, Elektronische Lohnsteuerbescheinigung → "Lohnsteuerbescheinigung"
+- Einkommensteuerbescheid, Bescheid fuer 20XX → "Steuerbescheid"
+- Einkommensteuererklaerung, Anlage N, Anlage V, Anlage Vorsorgeaufwand → "Steuererklärung"
+- SCHUFA-Auskunft, Bonitaetsauskunft, Selbstauskunft SCHUFA → "Selbstauskunft"
+- Kaufvertrag, Notarieller Kaufvertrag, Kaufvertragsentwurf → "Kaufvertrag"
+- Mietvertrag, Wohnungsmietvertrag → "Mietvertrag"
+- Handelsregisterauszug, HRA, HRB Auszug → "Handelsregisterauszug"
+- Foto vom Haus/Wohnung von aussen, Strassenseite, Fassade → "Objektbild Außen"
+- Foto vom Haus/Wohnung von innen, Zimmer, Kueche, Bad → "Objektbild Innen"
+- Bausparvertrag, Bausparkasse, Schwäbisch Hall, Wüstenrot → "Bausparvertrag"
+- Darlehensvertrag, Kreditvertrag, bestehender Kredit → "Darlehensvertrag"
+- Betriebswirtschaftliche Auswertung → "BWA"
+- Krankenversicherungsnachweis, Krankenversicherungskarte, PKV Bescheinigung → "Nachweis Krankenversicherung"
+- WICHTIG: Kontoauszuege die MEHRERE Konten mit Salden zeigen = "Eigenkapitalnachweis", NICHT "Kontoauszug". "Kontoauszug" ist NUR fuer einzelne Kontoauszuege mit Transaktionsliste.
+- WICHTIG: Depotauszuege, Wertpapieraufstellungen, Fondsanteile = "Depotnachweis", NICHT "Kontoauszug" oder "Sonstiges".
+- WICHTIG: Private Rentenversicherung, Riester-Vertrag, Ruerup-Rente = "Private Rentenversicherung", NICHT "Sonstiges".
+- WICHTIG: Private Lebensversicherung, Risikolebensversicherung, Kapitallebensversicherung = "Private Lebensversicherung", NICHT "Sonstiges".
+- Verwende "Sonstiges" WIRKLICH NUR als letzten Ausweg, wenn das Dokument in KEINEN der obigen Typen passt. Lieber eine Kategorie waehlen die ungefaehr passt als "Sonstiges".
 
 Extrahiere je nach Dokumenttyp:
 
@@ -2154,6 +2173,15 @@ def _process_email_impl(request: ProcessEmailRequest):
             messages=[
                 {"role": "system", "content": """Du bist ein E-Mail-Parser für Baufinanzierungsfälle.
 Analysiere die E-Mail und extrahiere strukturierte Daten.
+
+WICHTIG ZUR NAMEN-ERKENNUNG:
+- Der Absender (From) ist oft ein MAKLER/FINANZBERATER, NICHT der Antragsteller!
+- Der Antragsteller-Name steht typischerweise im E-Mail-BETREFF (z.B. "Max Mustermann - München", "Carsten Brand")
+- Der Antragsteller-Name kann auch im E-Mail-Text stehen ("Anfrage von Max Mustermann", "Kunde: ...")
+- Die Signatur am Ende der E-Mail gehoert dem ABSENDER (Makler), NICHT dem Antragsteller
+- Wenn der Betreff einen Personennamen enthaelt, ist das hoechstwahrscheinlich der Antragsteller
+- applicant_firstName/lastName = Name des ANTRAGSTELLERS (Kunde), NICHT des Absenders!
+
 Antworte NUR mit JSON:
 {
   "mail_type": "new_request" | "reply",
@@ -2225,6 +2253,34 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
     first_name = parsed.get("applicant_firstName") or ""
     last_name = parsed.get("applicant_lastName") or ""
     applicant_name = f"{first_name} {last_name}".strip()
+
+    # Sanity check: Wenn der extrahierte Name dem Absender entspricht,
+    # wurde wahrscheinlich der Broker statt des Antragstellers erkannt.
+    # In dem Fall: Namen aus dem Betreff verwenden.
+    if applicant_name and request.from_email and "@" in request.from_email:
+        sender_prefix = request.from_email.split("@")[0].lower()
+        sender_parts = set(sender_prefix.replace(".", " ").replace("-", " ").replace("_", " ").split())
+        name_parts = set(applicant_name.lower().split())
+        # Wenn >= 50% der Namensteile im Absender-Prefix vorkommen → Broker-Name
+        if name_parts and sender_parts and len(name_parts & sender_parts) >= len(name_parts) * 0.5:
+            import re as _re_name
+            subject_clean = (request.subject or "").strip()
+            # Reply-Prefixes entfernen
+            subject_clean = _re_name.sub(r"^(Re:|AW:|Fwd:|WG:|Antw:)\s*", "", subject_clean, flags=_re_name.IGNORECASE).strip()
+            # Orts-Suffix entfernen (z.B. " - Stuttgart")
+            if " - " in subject_clean:
+                subject_clean = subject_clean.split(" - ")[0].strip()
+            if subject_clean and not subject_clean.startswith("CASE-"):
+                logger.info(f"Applicant name corrected: '{applicant_name}' -> '{subject_clean}' (sender match detected)")
+                applicant_name = subject_clean
+                # Auch first/last für Case-Matching updaten
+                parts = subject_clean.split()
+                if len(parts) >= 2:
+                    first_name = parts[0]
+                    last_name = parts[-1]
+                elif len(parts) == 1:
+                    last_name = parts[0]
+                    first_name = ""
 
     match = cases.match_case(
         from_email=request.from_email,
@@ -2318,9 +2374,18 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
                 })
 
                 # Facts sammeln (einmal am Ende mergen)
-                new_facts = _map_extracted_to_facts(result.get("doc_type", ""), extracted)
+                _person = (result.get("meta") or {}).get("person_name")
+                new_facts = _map_extracted_to_facts(
+                    result.get("doc_type", ""), extracted,
+                    person_name=_person,
+                    case_applicant_name=applicant_name,
+                )
                 if new_facts:
                     all_new_facts = cases.merge_facts(all_new_facts, new_facts)
+
+                # Applicant name ggf. korrigieren (bei erster Ausweiskopie)
+                if result.get("doc_type") in ("Ausweiskopie", "Selbstauskunft") and _person:
+                    _maybe_update_applicant_name(case_id, _person)
 
                 docs_processed.append({"filename": filename, "doc_type": result.get("doc_type"), "success": True})
                 logger.info(f"Attachment processed: {filename} → {result.get('doc_type')}")
@@ -2434,10 +2499,22 @@ async def process_document(request: ProcessDocumentRequest):
     # 4. Facts in Case mergen
     try:
         doc_type = result.get("doc_type", "")
-        new_facts = _map_extracted_to_facts(doc_type, extracted)
+        _person = (result.get("meta") or {}).get("person_name")
+        # Case laden fuer applicant_name (per-person routing)
+        _case = cases.load_case(request.case_id)
+        _case_name = _case.get("applicant_name") if _case else None
+        new_facts = _map_extracted_to_facts(
+            doc_type, extracted,
+            person_name=_person,
+            case_applicant_name=_case_name,
+        )
         if new_facts:
             cases.save_facts(request.case_id, new_facts, source=f"document:{doc_type}")
         facts_merged = bool(new_facts)
+
+        # Applicant name ggf. korrigieren
+        if doc_type in ("Ausweiskopie", "Selbstauskunft") and _person:
+            _maybe_update_applicant_name(request.case_id, _person)
     except Exception as e:
         logger.error(f"Facts merge failed: {e}")
         facts_merged = False
@@ -2460,36 +2537,122 @@ async def process_document(request: ProcessDocumentRequest):
     )
 
 
-def _map_extracted_to_facts(doc_type: str, extracted: dict) -> dict:
-    """Mappt extrahierte Dokument-Daten auf facts_extracted Struktur"""
+def _clean_person_name(name: str) -> str:
+    """Remove titles and honorifics from a person name."""
+    if not name:
+        return ""
+    prefixes = {"herr", "frau", "dr.", "prof.", "dr", "prof", "dipl.", "ing."}
+    parts = name.strip().split()
+    cleaned = [p for p in parts if p.lower() not in prefixes]
+    return " ".join(cleaned)
+
+
+def _is_primary_applicant(person_name: str, case_applicant_name: str) -> bool:
+    """
+    Check if person_name matches the case's primary applicant.
+    Returns True if they share at least one name part (first/last name).
+    Returns True by default if we can't determine.
+    """
+    if not person_name or not case_applicant_name:
+        return True  # Can't determine → default to primary
+
+    pn = _clean_person_name(person_name).lower()
+    cn = _clean_person_name(case_applicant_name).lower()
+
+    # Handle "und"/"&" in names
+    pn_parts = set(pn.replace(" und ", " ").replace(" & ", " ").split())
+    cn_parts = set(cn.replace(" und ", " ").replace(" & ", " ").split())
+
+    # Remove common filler words
+    fillers = {"und", "&", "von", "van", "de", "der", "die", "das"}
+    pn_parts -= fillers
+    cn_parts -= fillers
+
+    if not pn_parts or not cn_parts:
+        return True
+
+    return bool(pn_parts & cn_parts)
+
+
+def _maybe_update_applicant_name(case_id: str, person_name: str):
+    """
+    Update applicant_name if the current one appears to be the broker's name.
+    Only called for identity documents (Ausweiskopie, Selbstauskunft).
+    """
+    if not person_name:
+        return
+    case = cases.load_case(case_id)
+    if not case:
+        return
+    current = (case.get("applicant_name") or "").strip()
+    partner_email = (case.get("partner_email") or "").lower()
+
+    if not current:
+        # No name set yet → set it from document
+        db.update_row("fin_cases", case["_id"], {"applicant_name": person_name})
+        logger.info(f"[{case_id}] applicant_name set from document: '{person_name}'")
+        return
+
+    # Check if current name matches the broker/partner email prefix
+    if not partner_email or "@" not in partner_email:
+        return
+    email_prefix = partner_email.split("@")[0]
+    email_parts = set(email_prefix.replace(".", " ").replace("-", " ").replace("_", " ").lower().split())
+    current_parts = set(current.lower().split())
+
+    # If >= 50% of current name parts appear in the broker email → likely broker name
+    if email_parts and current_parts:
+        overlap = current_parts & email_parts
+        if len(overlap) >= len(current_parts) * 0.5:
+            logger.info(f"[{case_id}] Updating applicant_name: '{current}' -> '{person_name}' (broker name detected)")
+            db.update_row("fin_cases", case["_id"], {"applicant_name": person_name})
+
+
+def _map_extracted_to_facts(doc_type: str, extracted: dict,
+                             person_name: str = None,
+                             case_applicant_name: str = None) -> dict:
+    """
+    Mappt extrahierte Dokument-Daten auf facts_extracted Struktur.
+
+    person_name: Name der Person im Dokument (aus meta.person_name)
+    case_applicant_name: Name des Hauptantragstellers aus dem Case
+
+    Bei Paaren: Wenn person_name nicht zum case_applicant_name passt,
+    werden die Daten unter _2-Keys gespeichert (applicant_data_2, income_data_2, etc.)
+    """
     facts = {}
 
+    # Determine person suffix for person-specific doc types
+    is_primary = _is_primary_applicant(person_name, case_applicant_name)
+    suffix = "" if is_primary else "_2"
+
     if doc_type in ("Ausweiskopie",):
-        facts["applicant_data"] = {
+        facts[f"applicant_data{suffix}"] = {
             "vorname": extracted.get("Vorname"),
             "nachname": extracted.get("Nachname"),
             "geburtsdatum": extracted.get("Geburtsdatum"),
             "geburtsort": extracted.get("Geburtsort"),
             "nationalitaet": extracted.get("Nationalität") or extracted.get("Nationalitaet"),
         }
-        facts["id_data"] = {
+        facts[f"id_data{suffix}"] = {
             "ausweisnummer": extracted.get("Ausweisnummer"),
             "gueltig_bis": extracted.get("Gültig bis"),
         }
 
     elif doc_type in ("Gehaltsnachweis", "Gehaltsabrechnung", "Gehaltsabrechnung Dezember", "Lohnsteuerbescheinigung"):
-        facts["income_data"] = {
+        facts[f"income_data{suffix}"] = {
             "arbeitgeber": extracted.get("Arbeitgeber"),
             "brutto": extracted.get("Brutto"),
             "netto": extracted.get("Netto"),
             "steuerklasse": extracted.get("Steuerklasse"),
         }
-        facts["employment_data"] = {
+        facts[f"employment_data{suffix}"] = {
             "arbeitgeber": extracted.get("Arbeitgeber"),
             "employment_type": "Angestellter",
         }
 
     elif doc_type in ("Kontoauszug",):
+        # Kontoauszug is shared / not person-specific
         facts["banking_data"] = {
             "bank": extracted.get("Bank"),
             "iban": extracted.get("IBAN"),
@@ -2497,6 +2660,7 @@ def _map_extracted_to_facts(doc_type: str, extracted: dict) -> dict:
         }
 
     elif doc_type in ("Exposé",):
+        # Property data is shared
         facts["property_data"] = {
             "purchase_price": extracted.get("Kaufpreis") or extracted.get("purchase_price"),
             "address": extracted.get("Adresse"),
@@ -2506,7 +2670,7 @@ def _map_extracted_to_facts(doc_type: str, extracted: dict) -> dict:
         }
 
     elif doc_type in ("Selbstauskunft",):
-        facts["applicant_data"] = {
+        facts[f"applicant_data{suffix}"] = {
             "vorname": extracted.get("Vorname") or extracted.get("applicant_first_name"),
             "nachname": extracted.get("Nachname") or extracted.get("applicant_last_name"),
             "email": extracted.get("E-Mail") or extracted.get("applicant_email"),

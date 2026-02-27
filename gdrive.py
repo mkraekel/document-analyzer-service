@@ -237,7 +237,7 @@ def process_google_drive_links(
         }
     """
     # Lazy imports to avoid circular dependencies
-    from main import analyze_with_gpt4o, _map_extracted_to_facts
+    from main import analyze_with_gpt4o, _map_extracted_to_facts, _maybe_update_applicant_name
     import case_logic as cases
     import seatable as db
     from datetime import datetime
@@ -349,10 +349,20 @@ def process_google_drive_links(
                 "processed_at": now_ts,
             })
 
-            # Merge facts
-            new_facts = _map_extracted_to_facts(result.get("doc_type", ""), extracted)
+            # Merge facts (per-person routing)
+            _person = (result.get("meta") or {}).get("person_name")
+            _case_name = case.get("applicant_name") if case else None
+            new_facts = _map_extracted_to_facts(
+                result.get("doc_type", ""), extracted,
+                person_name=_person,
+                case_applicant_name=_case_name,
+            )
             if new_facts:
                 all_new_facts = cases.merge_facts(all_new_facts, new_facts)
+
+            # Applicant name ggf. korrigieren
+            if result.get("doc_type") in ("Ausweiskopie", "Selbstauskunft") and _person:
+                _maybe_update_applicant_name(case_id, _person)
 
             # Upload to OneDrive (best-effort)
             if onedrive_folder_id:

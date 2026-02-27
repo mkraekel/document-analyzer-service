@@ -99,13 +99,32 @@ DOC_TYPE_ALIASES: dict[str, list[str]] = {
     "Eigenkapitalnachweis": [
         "Finanzstatus", "Vermögensaufstellung", "Depotauszug",
         "Sparkontoauszug", "Kontostände", "Vermögensstatus",
-        "Kontoübersicht", "Bankkontenübersicht",
+        "Kontoübersicht", "Bankkontenübersicht", "Depotnachweis",
     ],
     "Steuererklärung": [
         "Einkommensteuererklärung", "Steuererklärung (Anlage)",
     ],
     "Energieausweis": [
         "Energiepass", "Energetischer Ausweis",
+        "Energieverbrauchsausweis", "Energiebedarfsausweis",
+    ],
+    "Baubeschreibung": [
+        "Hausbeschreibung", "Objektbeschreibung",
+    ],
+    "Wohnflächenberechnung": [
+        "Flächenberechnung", "DIN277 Berechnung",
+    ],
+    "Steuerbescheid": [
+        "Einkommensteuerbescheid",
+    ],
+    "Kontoauszug": [
+        "Bankkontoauszug", "Girokonto Auszug",
+    ],
+    "Selbstauskunft": [
+        "SCHUFA-Auskunft", "Bonitätsauskunft", "Selbstauskunft SCHUFA",
+    ],
+    "Lohnsteuerbescheinigung": [
+        "Elektronische Lohnsteuerbescheinigung",
     ],
 }
 
