@@ -266,6 +266,18 @@ def process_google_drive_links(
     case = cases.load_case(case_id)
     onedrive_folder_id = case.get("onedrive_folder_id", "") if case else ""
 
+    # Wenn noch kein OneDrive-Ordner, kurz warten (n8n erstellt ihn parallel)
+    if not onedrive_folder_id:
+        import time
+        logger.info(f"[{case_id}] Kein OneDrive-Ordner – warte 15s auf n8n Setup...")
+        time.sleep(15)
+        case = cases.load_case(case_id)
+        onedrive_folder_id = case.get("onedrive_folder_id", "") if case else ""
+        if onedrive_folder_id:
+            logger.info(f"[{case_id}] OneDrive-Ordner jetzt verfuegbar: {onedrive_folder_id}")
+        else:
+            logger.warning(f"[{case_id}] Immer noch kein OneDrive-Ordner – Upload wird uebersprungen")
+
     # 2. Collect all files
     all_files = []
     for drive_item in drive_ids:
