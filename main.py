@@ -31,17 +31,54 @@ except Exception as e:
     logger.warning(f"dotenv not available: {e}")
 
 from pypdf import PdfReader
+from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
 from pydantic import BaseModel
 from typing import Optional
 
 app = FastAPI(title="Document Analyzer", version="1.0.0")
 
-# Dashboard
+# ── Legacy Redirect ───────────────────────────────────────────────
+from fastapi.responses import RedirectResponse as _Redirect
+
+@app.get("/dashboard")
+async def legacy_dashboard_redirect():
+    return _Redirect(url="/app", status_code=302)
+
+# ── Auth ──────────────────────────────────────────────────────────
+import auth
+
+@app.post("/api/auth/login")
+async def login(req: auth.LoginRequest):
+    user = auth.authenticate_user(req.username, req.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Ungueltige Anmeldedaten")
+    token = auth.create_access_token(user)
+    return auth.TokenResponse(access_token=token, user=user)
+
+# ── Dashboard API (geschuetzt) ───────────────────────────────────
 from dashboard import router as dashboard_router
-app.include_router(dashboard_router)
+app.include_router(dashboard_router, dependencies=[auth.Depends(auth.get_current_user)])
+
+# ── React Dashboard SPA ──────────────────────────────────────────
+_DASHBOARD_DIST = Path(__file__).parent / "dashboard" / "dist"
+
+if _DASHBOARD_DIST.is_dir():
+    # Static assets (JS, CSS, etc.)
+    app.mount("/app/assets", StaticFiles(directory=_DASHBOARD_DIST / "assets"), name="dashboard-assets")
+
+    @app.get("/app/{rest:path}")
+    async def serve_spa(rest: str = ""):
+        """Serve React SPA – alle /app/* Routen liefern index.html aus."""
+        index = _DASHBOARD_DIST / "index.html"
+        if index.exists():
+            return HTMLResponse(index.read_text())
+        raise HTTPException(404, "Dashboard nicht gebaut. Bitte 'npm run build' im dashboard/ Ordner ausfuehren.")
+else:
+    logger.info("React Dashboard nicht gefunden (dashboard/dist/) – nur API verfuegbar")
 
 
 @app.on_event("startup")

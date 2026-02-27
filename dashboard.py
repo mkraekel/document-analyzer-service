@@ -43,14 +43,6 @@ def _safe_partner_email(extracted_email: str | None, fallback_email: str) -> str
 # Dashboard Page
 # ──────────────────────────────────────────
 
-@router.get("/dashboard", response_class=HTMLResponse)
-async def dashboard_page():
-    import os
-    html_path = os.path.join(os.path.dirname(__file__), "static", "dashboard.html")
-    with open(html_path, "r", encoding="utf-8") as f:
-        return HTMLResponse(f.read())
-
-
 # ──────────────────────────────────────────
 # API: Stats
 # ──────────────────────────────────────────
