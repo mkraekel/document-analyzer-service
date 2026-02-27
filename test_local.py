@@ -297,25 +297,32 @@ def test_stateless():
         assert immobilie["objektart"] == "EIGENTUMSWOHNUNG"
     passed += run_test("POST /build-europace-payload → Payload korrekt", t_europace)
 
-    # Check-Readiness: stateless (direkt via request body)
+    # Check-Readiness: delegiert an readiness.py (braucht DB-Mock)
     total += 1
-    def t_readiness_stateless():
-        r = client.post("/check-readiness", json={
-            "case_id": "CASE-STATELESS",
-            "facts_extracted": {
+    def t_readiness_via_db():
+        from unittest.mock import patch
+        mock_case = {
+            "_id": "CASE-TEST-READINESS",
+            "applicant_name": "Test User",
+            "_facts_extracted": {
                 "property_data": {"purchase_price": 350000, "object_type": "ETW", "usage": "Eigennutzung"},
                 "financing_data": {"loan_amount": 280000, "equity_to_use": 70000},
             },
-            "docs_index": {}
-        })
-        assert r.status_code == 200, f"Status: {r.status_code}, Body: {r.text[:200]}"
-        d = r.json()
-        assert "new_status" in d
-        assert "missing_required" in d
-        assert "missing_docs" in d
-        # Ohne Docs sollte es missing haben
-        assert len(d["missing_docs"]) > 0, "Ohne Dokumente sollten missing_docs > 0 sein"
-    passed += run_test("POST /check-readiness → stateless (kein SeaTable)", t_readiness_stateless)
+            "_answers_user": {},
+            "_manual_overrides": {},
+            "_derived_values": {},
+        }
+        with patch("readiness.cases.load_case", return_value=mock_case), \
+             patch("readiness.cases.build_docs_index", return_value={}), \
+             patch("readiness.cases.update_status"):
+            r = client.post("/check-readiness", json={"case_id": "CASE-TEST-READINESS"})
+            assert r.status_code == 200, f"Status: {r.status_code}, Body: {r.text[:200]}"
+            d = r.json()
+            assert "new_status" in d
+            assert "missing_required" in d
+            assert "missing_docs" in d
+            assert len(d["missing_docs"]) > 0, "Ohne Dokumente sollten missing_docs > 0 sein"
+    passed += run_test("POST /check-readiness → via readiness.py (DB-Mock)", t_readiness_via_db)
 
     # Generate-Questions: Fallback ohne GPT
     total += 1

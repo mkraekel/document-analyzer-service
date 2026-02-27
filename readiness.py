@@ -1,7 +1,9 @@
 """
 Readiness Check Logic
 Prüft ob ein Case vollständig ist und bestimmt den nächsten Status.
-Portiert aus dem n8n Readiness Router.
+
+EINZIGE AUTHORITATIVE IMPLEMENTIERUNG.
+main.py's /check-readiness delegiert hierher.
 """
 
 import json
@@ -30,41 +32,43 @@ BROKER_REQUIRED = ["partnerId"]
 
 # ============================================================
 # DOKUMENT-ANFORDERUNGEN
+# per_person=True → count wird bei Paaren verdoppelt
 # ============================================================
 DOCS_REQUIRED_ALWAYS = {
-    "Selbstauskunft": {"count": 1, "max_age_days": None},
-    "Ausweiskopie": {"count": 1, "max_age_days": None, "warn_expiry_days": 90},
-    "Eigenkapitalnachweis": {"count": 1, "max_age_days": 30},
-    "Renteninfo": {"count": 1, "max_age_days": None},
+    "Selbstauskunft":       {"count": 1, "max_age_days": None, "per_person": False},
+    "Ausweiskopie":         {"count": 1, "max_age_days": None, "per_person": True, "warn_expiry_days": 90},
+    "Eigenkapitalnachweis": {"count": 1, "max_age_days": 30,   "per_person": False},
+    "Renteninfo":           {"count": 1, "max_age_days": None, "per_person": True},
 }
 
 DOCS_REQUIRED_EMPLOYED = {
-    "Gehaltsnachweis": {"count": 3, "max_age_days": 90},
-    "Kontoauszug": {"count": 3, "max_age_days": 90},
-    "Steuerbescheid": {"count": 1, "max_age_days": None},
-    "Steuererklärung": {"count": 1, "max_age_days": None},
-    "Lohnsteuerbescheinigung": {"count": 1, "max_age_days": None, "alternative": "Gehaltsabrechnung Dezember"},
+    "Gehaltsnachweis":          {"count": 3, "max_age_days": 90,   "per_person": True},
+    "Kontoauszug":              {"count": 3, "max_age_days": 90,   "per_person": True},
+    "Steuerbescheid":           {"count": 1, "max_age_days": None, "per_person": True},
+    "Steuererklärung":          {"count": 1, "max_age_days": None, "per_person": True},
+    "Lohnsteuerbescheinigung":  {"count": 1, "max_age_days": None, "per_person": True, "alternative": "Gehaltsabrechnung Dezember"},
 }
 
 DOCS_REQUIRED_SELF_EMPLOYED = {
-    "BWA": {"count": 3, "max_age_days": None},
-    "Summen und Saldenliste": {"count": 3, "max_age_days": None},
-    "Jahresabschluss": {"count": 3, "max_age_days": None},
-    "Steuerbescheid": {"count": 2, "max_age_days": None},
-    "Steuererklärung": {"count": 2, "max_age_days": None},
-    "Kontoauszug": {"count": 3, "max_age_days": 90},
-    "Nachweis Krankenversicherung": {"count": 1, "max_age_days": None},
+    "BWA":                          {"count": 3, "max_age_days": None, "per_person": True},
+    "Summen und Saldenliste":       {"count": 3, "max_age_days": None, "per_person": True},
+    "Jahresabschluss":              {"count": 3, "max_age_days": None, "per_person": True},
+    "Steuerbescheid":               {"count": 2, "max_age_days": None, "per_person": True},
+    "Steuererklärung":              {"count": 2, "max_age_days": None, "per_person": True},
+    "Kontoauszug":                  {"count": 3, "max_age_days": 90,   "per_person": True},
+    "Nachweis Krankenversicherung": {"count": 1, "max_age_days": None, "per_person": True},
 }
 
 DOCS_REQUIRED_PROPERTY = {
-    "Exposé": {"count": 1, "max_age_days": None},
-    "Objektbild Innen": {"count": 1, "max_age_days": None},
-    "Objektbild Außen": {"count": 1, "max_age_days": None},
-    "Baubeschreibung": {"count": 1, "max_age_days": None},
-    "Grundbuch": {"count": 1, "max_age_days": 90},
-    "Wohnflächenberechnung": {"count": 1, "max_age_days": None},
-    "Grundriss": {"count": 1, "max_age_days": None},
-    "Energieausweis": {"count": 1, "max_age_days": None},
+    "Exposé":                  {"count": 1, "max_age_days": None},
+    "Objektbild Innen":        {"count": 1, "max_age_days": None},
+    "Objektbild Außen":        {"count": 1, "max_age_days": None},
+    "Baubeschreibung":         {"count": 1, "max_age_days": None},
+    "Grundbuch":               {"count": 1, "max_age_days": 90},
+    "Teilungserklärung":       {"count": 1, "max_age_days": None},
+    "Wohnflächenberechnung":   {"count": 1, "max_age_days": None},
+    "Grundriss":               {"count": 1, "max_age_days": None},
+    "Energieausweis":          {"count": 1, "max_age_days": None},
 }
 
 # ============================================================
@@ -125,6 +129,9 @@ DOC_TYPE_ALIASES: dict[str, list[str]] = {
     ],
     "Lohnsteuerbescheinigung": [
         "Elektronische Lohnsteuerbescheinigung",
+    ],
+    "Teilungserklärung": [
+        "Aufteilungsplan", "Gemeinschaftsordnung",
     ],
 }
 
@@ -208,20 +215,29 @@ def _doc_expiry_warn(doc: dict, warn_days: Optional[int]) -> bool:
         return False
 
 
+def _count_docs_with_aliases(docs_index: dict, doc_type: str) -> list:
+    """Sammelt alle Dokumente fuer einen Typ inkl. aller Aliase."""
+    docs = list(docs_index.get(doc_type, []))
+    for alias in DOC_TYPE_ALIASES.get(doc_type, []):
+        docs.extend(docs_index.get(alias, []))
+    return docs
+
+
 def check_readiness(case_id: str) -> dict:
     """
     Vollständige Readiness-Prüfung für einen Case.
+    EINZIGE autoritative Implementierung.
 
     Rückgabe:
     {
-        status: str,          # nächster Status
+        status: str,
         missing_financing: list,
         missing_broker: list,
         missing_docs: list,
         stale_docs: list,
         warnings: list,
         manual_overrides_applied: list,
-        effective_view: dict,  # berechnete Gesamtsicht
+        effective_view: dict,
     }
     """
     case = cases.load_case(case_id)
@@ -263,28 +279,36 @@ def check_readiness(case_id: str) -> dict:
     # ──────────────────────────────────────────
     # 3. Dokument-Checks
     # ──────────────────────────────────────────
-    is_couple = bool(view.get("is_couple"))
-    employment = str(view.get("employment_type") or view.get("employment_status") or "Angestellter")
+    is_couple = bool(
+        view.get("is_couple")
+        or _get_nested(view, "applicant_data_2.vorname")
+        or _get_nested(view, "applicant_data_2.nachname")
+    )
+    employment = str(
+        view.get("employment_type")
+        or _get_nested(view, "employment_data.employment_type")
+        or view.get("employment_status")
+        or "Angestellter"
+    )
     is_self_employed = "selbst" in employment.lower() or "freiberuf" in employment.lower()
     has_joint_account = bool(overrides.get("has_joint_account") or view.get("has_joint_account"))
 
     person_count = 2 if is_couple else 1
 
-    def check_doc(doc_type: str, req: dict, label: str = None):
-        label = label or doc_type
-        docs = list(docs_index.get(doc_type, []))
-
-        # Aliase pruefen (z.B. "Gehaltsabrechnung" zaehlt als "Gehaltsnachweis")
-        for alias in DOC_TYPE_ALIASES.get(doc_type, []):
-            docs.extend(docs_index.get(alias, []))
+    def check_doc(doc_type: str, req: dict):
+        """
+        Prüft ob genug Dokumente vorhanden sind.
+        Berechnet required_count korrekt per person_count * per_person.
+        KEIN Loop - wird genau 1x pro Dokumenttyp aufgerufen.
+        """
+        # Alle Dokumente inkl. Aliase sammeln
+        docs = _count_docs_with_aliases(docs_index, doc_type)
 
         alternative = req.get("alternative")
 
-        # Alternative prüfen
+        # Alternative prüfen wenn Haupttyp leer
         if not docs and alternative:
-            alt_docs = list(docs_index.get(alternative, []))
-            for alias in DOC_TYPE_ALIASES.get(alternative, []):
-                alt_docs.extend(docs_index.get(alias, []))
+            alt_docs = _count_docs_with_aliases(docs_index, alternative)
             if alt_docs:
                 docs = alt_docs
 
@@ -293,7 +317,19 @@ def check_readiness(case_id: str) -> dict:
             overrides_applied.append(f"accept_missing:{doc_type}")
             return
 
-        required_count = req.get("count", 1)
+        # Required count berechnen: bei per_person=True verdoppeln fuer Paare
+        base_count = req.get("count", 1)
+        is_per_person = req.get("per_person", False)
+
+        if is_per_person and is_couple:
+            # Sonderfall Kontoauszug bei Gemeinschaftskonto
+            if doc_type == "Kontoauszug" and has_joint_account:
+                required_count = base_count  # Nicht verdoppeln
+            else:
+                required_count = base_count * person_count
+        else:
+            required_count = base_count
+
         max_age = req.get("max_age_days")
         warn_days = req.get("warn_expiry_days")
 
@@ -304,20 +340,28 @@ def check_readiness(case_id: str) -> dict:
 
         if len(fresh_docs) < required_count:
             if len(docs) >= required_count and not accept_stale:
-                stale_docs.append({"type": label, "required": required_count, "found": len(docs), "fresh": len(fresh_docs)})
+                stale_docs.append({
+                    "type": doc_type,
+                    "required": required_count,
+                    "found": len(docs),
+                    "fresh": len(fresh_docs),
+                })
             else:
-                missing_docs.append({"type": label, "required": required_count, "found": len(fresh_docs)})
+                missing_docs.append({
+                    "type": doc_type,
+                    "required": required_count,
+                    "found": len(fresh_docs),
+                })
         else:
             # Ablaufdatum-Warnung
             if warn_days:
                 for doc in fresh_docs:
                     if _doc_expiry_warn(doc, warn_days):
-                        warnings.append(f"{label} läuft bald ab")
+                        warnings.append(f"{doc_type} läuft bald ab")
 
-    # Immer erforderlich
+    # Immer erforderlich (KEIN Loop ueber person_count - stattdessen per_person flag)
     for doc_type, req in DOCS_REQUIRED_ALWAYS.items():
-        for p in range(person_count):
-            check_doc(doc_type, req)
+        check_doc(doc_type, req)
 
     # Angestellte oder Selbstständige
     if is_self_employed:
@@ -325,13 +369,9 @@ def check_readiness(case_id: str) -> dict:
             check_doc(doc_type, req)
     else:
         for doc_type, req in DOCS_REQUIRED_EMPLOYED.items():
-            # Kontoauszug: Bei Gemeinschaftskonto nur 3x statt 6x
-            if doc_type == "Kontoauszug" and is_couple and has_joint_account:
-                req = dict(req)
-                req["count"] = 3
             check_doc(doc_type, req)
 
-    # Objektdokumente
+    # Objektdokumente (nie per_person)
     for doc_type, req in DOCS_REQUIRED_PROPERTY.items():
         check_doc(doc_type, req)
 
@@ -346,7 +386,6 @@ def check_readiness(case_id: str) -> dict:
     # Priorität: APPROVE_IMPORT > WAIT_FOR_DOCS > sonstige Blocker
     # ──────────────────────────────────────────
     if approve_import:
-        # Broker-Override: Direkt zum Import, übersteuert alle anderen Checks
         status = "READY_FOR_IMPORT"
 
     elif wait_for_docs:
@@ -369,8 +408,12 @@ def check_readiness(case_id: str) -> dict:
 
     # Tatsächlich vollständig = keine offenen Punkte
     actually_complete = not missing_financing and not missing_docs and not stale_docs and not missing_broker
-    # Business-Complete = Status erlaubt Import (kann durch Override erzwungen sein)
     is_complete = status in ("READY_FOR_IMPORT", "AWAITING_BROKER_CONFIRMATION")
+
+    # Completeness Prozent (fuer Dashboard)
+    total_checks = len(REQUIRED_FINANCING_KEYS) + len(missing_docs) + (len(REQUIRED_FINANCING_KEYS) - len(missing_financing))
+    passed_checks = total_checks - len(missing_financing) - len(missing_docs)
+    completeness_percent = round((passed_checks / max(total_checks, 1)) * 100)
 
     result = {
         "status": status,
@@ -385,10 +428,13 @@ def check_readiness(case_id: str) -> dict:
         "is_complete": is_complete,
         "actually_complete": actually_complete,
         "forced_approval": approve_import and not actually_complete,
+        "completeness_percent": completeness_percent,
+        "is_couple": is_couple,
+        "employment_type": employment,
     }
 
     # In DB speichern (cached case durchreichen → spart 1 DB call)
     cases.update_status(case_id, status, result, _cached_case=case)
-    logger.info(f"Readiness check for {case_id}: {status} | missing_fin={missing_financing} | missing_docs={len(missing_docs)}")
+    logger.info(f"Readiness check for {case_id}: {status} | missing_fin={missing_financing} | missing_docs={len(missing_docs)} | is_couple={is_couple}")
 
     return result
