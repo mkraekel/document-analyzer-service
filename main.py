@@ -118,13 +118,17 @@ Dokumenttyp erkennen aus: {doc_types}
 
 WICHTIGE KLASSIFIZIERUNGS-HINWEISE:
 - Reisepass, Personalausweis, Aufenthaltstitel → "Ausweiskopie"
-- Gehaltsabrechnung, Entgeltnachweis, Entgeltabrechnung, Lohnabrechnung, Verdienstbescheinigung → "Gehaltsnachweis"
+- Gehaltsabrechnung, Entgeltnachweis, Entgeltabrechnung, Lohnabrechnung, Lohnausweis, Verdienstbescheinigung, Brutto-Netto-Abrechnung → "Gehaltsnachweis"
 - Renteninformation, Rentenauskunft → "Renteninfo"
-- Grundbuchauszug, Grundbuchblatt → "Grundbuch"
+- Grundbuchauszug, Grundbuchblatt, GB-Auszug → "Grundbuch"
 - Immobilienexposé, Verkaufsexposé, Objektbeschreibung mit Kaufpreis → "Exposé"
-- Finanzstatus, Vermögensaufstellung, Depotauszug, Sparkontoauszug → "Eigenkapitalnachweis"
+- Finanzstatus, Vermögensaufstellung, Depotauszug, Sparkontoauszug, Kontouebersicht mit Salden/Guthaben, Bankkonten-Uebersicht → "Eigenkapitalnachweis"
 - Wohnungsgrundriss, Grundrissplan, Grundrisszeichnung → "Grundriss"
 - Energiepass → "Energieausweis"
+- Hausbeschreibung, Hausunterlagen mit technischen Details → "Baubeschreibung"
+- Teilungserklaerung, Aufteilungsplan → "Teilungserklärung"
+- Flurkarte, Lageplan → "Grundriss" (wenn es einen Grundriss/Plan des Objekts zeigt)
+- WICHTIG: Kontoauszuege die MEHRERE Konten mit Salden zeigen = "Eigenkapitalnachweis", NICHT "Kontoauszug". "Kontoauszug" ist NUR fuer einzelne Kontoauszuege mit Transaktionen.
 - Verwende "Sonstiges" NUR wenn das Dokument wirklich in KEINEN der obigen Typen passt.
 
 Extrahiere je nach Dokumenttyp:

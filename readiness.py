@@ -77,7 +77,7 @@ DOC_TYPE_ALIASES: dict[str, list[str]] = {
     "Gehaltsnachweis": [
         "Gehaltsabrechnung", "Entgeltnachweis", "Entgeltabrechnung",
         "Lohn/Gehaltsabrechnung", "Lohnabrechnung", "Verdienstbescheinigung",
-        "Bezügemitteilung",
+        "Bezügemitteilung", "Lohnausweis", "Brutto-Netto-Abrechnung",
     ],
     "Ausweiskopie": [
         "Reisepass", "Personalausweis", "Ausweis", "Aufenthaltstitel",
@@ -99,6 +99,7 @@ DOC_TYPE_ALIASES: dict[str, list[str]] = {
     "Eigenkapitalnachweis": [
         "Finanzstatus", "Vermögensaufstellung", "Depotauszug",
         "Sparkontoauszug", "Kontostände", "Vermögensstatus",
+        "Kontoübersicht", "Bankkontenübersicht",
     ],
     "Steuererklärung": [
         "Einkommensteuererklärung", "Steuererklärung (Anlage)",
