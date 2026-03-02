@@ -2812,7 +2812,7 @@ async def admin_delete_case(request: dict):
     if not case_id:
         raise HTTPException(status_code=400, detail="case_id required")
     results = {}
-    for table, col in [("fin_documents", "caseId"), ("processed_emails", "case_id"), ("fin_cases", "case_id")]:
+    for table, col in [("fin_documents", '"caseId"'), ("processed_emails", "case_id"), ("fin_cases", "case_id")]:
         try:
             with _pg._get_conn() as conn:
                 with conn.cursor() as cur:
