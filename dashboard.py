@@ -17,6 +17,7 @@ from typing import Optional
 import seatable as db
 import case_logic as cases
 import readiness as rdns
+from readiness import _compute_effective_view
 import notify
 
 N8N_SCAN_WEBHOOK = os.getenv("N8N_SCAN_WEBHOOK", "")
@@ -178,6 +179,8 @@ async def dashboard_case_detail(case_id: str):
         answers = case.get("_answers_user", {})
         overrides = case.get("_manual_overrides", {})
         readiness = case.get("_readiness", {})
+        # Always compute fresh effective_view from current facts/answers/overrides
+        readiness["effective_view"] = _compute_effective_view(case)
         audit = case.get("_audit_log", [])
         conv_ids = case.get("_conversation_ids", [])
 
