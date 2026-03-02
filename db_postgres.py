@@ -325,6 +325,22 @@ def update_row(table_name: str, row_id: str, row_data: dict) -> dict:
         raise
 
 
+def delete_rows(table_name: str, column: str, value: str) -> dict:
+    """Delete rows where column matches value."""
+    try:
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"DELETE FROM {table_name} WHERE {_quote_col(column)} = %s",
+                    (value,),
+                )
+                deleted = cur.rowcount
+        return {"deleted_rows": deleted}
+    except Exception as e:
+        logger.error(f"PG delete_rows({table_name}, {column}={value}) failed: {e}")
+        raise
+
+
 def batch_create_rows(table_name: str, rows: list[dict]) -> dict:
     """Insert multiple rows in a single transaction."""
     if not rows:

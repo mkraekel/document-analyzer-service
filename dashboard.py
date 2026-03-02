@@ -351,7 +351,7 @@ async def dashboard_override(case_id: str, req: OverrideRequest):
 # ──────────────────────────────────────────
 
 class ActionRequest(BaseModel):
-    action: str  # FREIGABE, WAIT_FOR_DOCS, RECHECK
+    action: str  # FREIGABE, WAIT_FOR_DOCS, RECHECK, REANALYZE
 
 @router.post("/api/dashboard/case/{case_id}/action")
 async def dashboard_action(case_id: str, req: ActionRequest):
@@ -364,6 +364,8 @@ async def dashboard_action(case_id: str, req: ActionRequest):
             cases.save_answers(case_id, {}, actor="broker", overrides={"WAIT_FOR_DOCS": True})
         elif action == "RECHECK":
             pass  # nur Recheck, kein Override
+        elif action == "REANALYZE":
+            return await _do_reanalyze(case_id)
         else:
             raise HTTPException(status_code=400, detail=f"Unbekannte Aktion: {action}")
 
@@ -543,11 +545,14 @@ async def dashboard_update_field(case_id: str, req: UpdateFieldRequest):
 class CheckFileRequest(BaseModel):
     case_id: str
     onedrive_file_id: str
+    force_reanalyze: bool = False
 
 @router.post("/api/dashboard/check-file-processed")
 async def check_file_processed(req: CheckFileRequest):
     """Prüft ob eine OneDrive-Datei bereits analysiert wurde."""
     try:
+        if req.force_reanalyze:
+            return {"already_processed": False}
         docs = db.search_rows("fin_documents", "caseId", req.case_id)
         for d in docs:
             if d.get("onedrive_file_id") == req.onedrive_file_id:
@@ -564,6 +569,7 @@ async def check_file_processed(req: CheckFileRequest):
 
 class GDriveRequest(BaseModel):
     google_drive_links: Optional[list] = None  # Optional: override links from case
+    force_reanalyze: bool = False
 
 @router.post("/api/dashboard/case/{case_id}/process-gdrive")
 async def dashboard_process_gdrive(case_id: str, req: GDriveRequest = None):
@@ -574,6 +580,10 @@ async def dashboard_process_gdrive(case_id: str, req: GDriveRequest = None):
         case = cases.load_case(case_id)
         if not case:
             raise HTTPException(status_code=404, detail="Case nicht gefunden")
+
+        # Bei force_reanalyze: facts leeren
+        if req and req.force_reanalyze:
+            _clear_facts_for_reanalyze(case)
 
         # Use provided links or look in case audit_log/emails for stored links
         links = (req.google_drive_links if req and req.google_drive_links else None)
@@ -634,13 +644,115 @@ async def dashboard_process_gdrive(case_id: str, req: GDriveRequest = None):
 
 
 # ──────────────────────────────────────────
+# Reanalyze Helpers
+# ──────────────────────────────────────────
+
+def _clear_facts_for_reanalyze(case: dict):
+    """Leert facts_extracted und löscht Dokument-Records für Neuanalyse."""
+    case_id = case.get("case_id")
+    # 1. facts_extracted leeren (merge_facts füllt nur leere Slots → muss leer sein)
+    audit = case.get("_audit_log", [])
+    audit.append({"event": "reanalyze_started", "ts": datetime.utcnow().isoformat(), "source": "dashboard"})
+    audit = audit[-100:]
+    db.update_row("fin_cases", case["_id"], {
+        "facts_extracted": json.dumps({}),
+        "audit_log": json.dumps(audit),
+    })
+    # 2. Alle Dokument-Records löschen (werden bei Neuanalyse neu erstellt)
+    result = db.delete_rows("fin_documents", "caseId", case_id)
+    logger.info(f"Reanalyze: cleared facts + deleted {result.get('deleted_rows', 0)} docs for {case_id}")
+
+
+async def _do_reanalyze(case_id: str) -> dict:
+    """Führt Neuanalyse durch: OneDrive-Scan ODER Google Drive je nach Case."""
+    import asyncio
+
+    case = cases.load_case(case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="Case nicht gefunden")
+
+    _clear_facts_for_reanalyze(case)
+
+    folder_id = case.get("onedrive_folder_id")
+    has_gdrive = False
+    # Prüfe ob Google Drive Links vorhanden
+    emails = db.search_rows("processed_emails", "case_id", case_id)
+    for email in emails:
+        parsed = email.get("parsed_result") or {}
+        if isinstance(parsed, str):
+            try:
+                parsed = json.loads(parsed)
+            except Exception:
+                parsed = {}
+        if parsed.get("google_drive_links"):
+            has_gdrive = True
+            break
+
+    results = {}
+
+    # OneDrive Scan
+    if folder_id and N8N_SCAN_WEBHOOK:
+        try:
+            async with httpx.AsyncClient(timeout=180) as client:
+                resp = await client.post(N8N_SCAN_WEBHOOK, json={
+                    "case_id": case_id,
+                    "onedrive_folder_id": folder_id,
+                    "force_reanalyze": True,
+                })
+                resp.raise_for_status()
+                scan_result = resp.json()
+                results["onedrive_scanned"] = scan_result.get("scanned", 0)
+        except Exception as e:
+            logger.error(f"Reanalyze OneDrive scan failed: {e}")
+            results["onedrive_error"] = str(e)
+
+    # Google Drive Processing
+    if has_gdrive:
+        try:
+            import gdrive
+            # Links aus E-Mails sammeln
+            gdrive_links = []
+            for email in emails:
+                parsed = email.get("parsed_result") or {}
+                if isinstance(parsed, str):
+                    try:
+                        parsed = json.loads(parsed)
+                    except Exception:
+                        parsed = {}
+                gdrive_links.extend(parsed.get("google_drive_links", []))
+            if gdrive_links:
+                gdrive_result = await asyncio.to_thread(
+                    gdrive.process_google_drive_links, case_id=case_id, links=gdrive_links
+                )
+                results["gdrive_processed"] = gdrive_result.get("files_processed", 0)
+        except Exception as e:
+            logger.error(f"Reanalyze GDrive failed: {e}")
+            results["gdrive_error"] = str(e)
+
+    # Readiness Check
+    try:
+        readiness_result = rdns.check_readiness(case_id)
+        results["status"] = readiness_result.get("status")
+    except Exception as e:
+        logger.error(f"Readiness after reanalyze failed: {e}")
+
+    results["success"] = True
+    results["case_id"] = case_id
+    return results
+
+
+# ──────────────────────────────────────────
 # API: Scan Documents (triggers n8n OneDrive scan)
 # ──────────────────────────────────────────
 
+class ScanRequest(BaseModel):
+    force_reanalyze: bool = False
+
 @router.post("/api/dashboard/case/{case_id}/scan-documents")
-async def dashboard_scan_documents(case_id: str):
+async def dashboard_scan_documents(case_id: str, req: ScanRequest = None):
     """Triggert n8n Webhook zum Scannen des OneDrive-Ordners."""
     try:
+        force = req.force_reanalyze if req else False
         case = cases.load_case(case_id)
         if not case:
             raise HTTPException(status_code=404, detail="Case nicht gefunden")
@@ -652,11 +764,16 @@ async def dashboard_scan_documents(case_id: str):
         if not N8N_SCAN_WEBHOOK:
             raise HTTPException(status_code=503, detail="N8N_SCAN_WEBHOOK nicht konfiguriert")
 
+        # Bei force_reanalyze: facts_extracted leeren damit merge_facts frisch startet
+        if force:
+            _clear_facts_for_reanalyze(case)
+
         # n8n Webhook aufrufen – n8n listet Dateien und ruft /process-document pro Datei
         async with httpx.AsyncClient(timeout=120) as client:
             resp = await client.post(N8N_SCAN_WEBHOOK, json={
                 "case_id": case_id,
                 "onedrive_folder_id": folder_id,
+                "force_reanalyze": force,
             })
             resp.raise_for_status()
             result = resp.json()

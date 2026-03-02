@@ -191,6 +191,26 @@ export function CaseDetail() {
     }
   }
 
+  async function doReanalyze() {
+    if (!confirm('Alle Dokumente werden neu analysiert. Extrahierte Daten werden zurückgesetzt. Fortfahren?')) return
+    setBusy(true)
+    try {
+      const res = await api.post<{ onedrive_scanned?: number; gdrive_processed?: number; status?: string }>(
+        `/api/dashboard/case/${caseId}/action`,
+        { action: 'REANALYZE' },
+      )
+      const parts: string[] = []
+      if (res.onedrive_scanned) parts.push(`${res.onedrive_scanned} OneDrive-Dateien`)
+      if (res.gdrive_processed) parts.push(`${res.gdrive_processed} GDrive-Dateien`)
+      addToast(parts.length ? `Neu analysiert: ${parts.join(', ')}` : 'Neuanalyse gestartet', 'success')
+      refetch()
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : 'Fehler bei Neuanalyse', 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   if (loading || !caseData) return <LoadingSpinner />
 
   const c = caseData
@@ -269,6 +289,14 @@ export function CaseDetail() {
             >
               <RefreshCw size={14} />
               Erneut prüfen
+            </button>
+            <button
+              onClick={doReanalyze}
+              disabled={busy}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-orange-300 text-orange-700 rounded-lg hover:bg-orange-50 disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw size={14} />
+              Neu analysieren
             </button>
             <button
               onClick={() => doAction('FREIGABE')}
