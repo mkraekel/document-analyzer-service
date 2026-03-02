@@ -2068,8 +2068,8 @@ def _process_email_impl(request: ProcessEmailRequest):
         body_text=_body_short,
     )
     if not gate["pass"]:
-        db.log_processed_email(request.provider_message_id, "skipped", gate["reason"],
-                               parsed_result={"gate": gate}, **_log_kwargs)
+        # Nicht loggen – diese Mails sind irrelevant (Newsletter, System, nicht-allowlisted)
+        logger.debug(f"Gatekeeper blocked: {gate['reason']} | {request.from_email} | {request.subject}")
         return {"action": "skipped", "reason": gate["reason"]}
 
     # 3. KI-Parsing über bestehenden parse-email Logic
@@ -2802,6 +2802,25 @@ async def admin_inspect():
             result["outgoing_emails"] = [dict(zip(cols, row)) for row in cur.fetchall()]
 
     return result
+
+
+@app.post("/admin/delete-case")
+async def admin_delete_case(request: dict):
+    """Löscht einen einzelnen Case und zugehörige Dokumente/E-Mails."""
+    import db_postgres as _pg
+    case_id = request.get("case_id")
+    if not case_id:
+        raise HTTPException(status_code=400, detail="case_id required")
+    results = {}
+    for table, col in [("fin_documents", "caseId"), ("processed_emails", "case_id"), ("fin_cases", "case_id")]:
+        try:
+            with _pg._get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(f"DELETE FROM {table} WHERE {col} = %s", (case_id,))
+                    results[table] = cur.rowcount
+        except Exception as e:
+            results[table] = f"error: {e}"
+    return {"deleted": results, "case_id": case_id}
 
 
 @app.post("/admin/clear-db")

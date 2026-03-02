@@ -85,8 +85,8 @@ async def dashboard_triage():
         ]
         rows = db.query_rows(
             "processed_emails", triage_cols,
-            where="processing_result = %s",
-            where_params=("no_case_match",),
+            where="processing_result IN (%s, %s, %s)",
+            where_params=("no_case_match", "triage", "irrelevant"),
             order_by="created_at DESC",
             limit=200,
         )

@@ -43,16 +43,36 @@ def gatekeeper(from_email: str, subject: str, conversation_id: str = None) -> di
     subject = subject or ""
 
     REPLY_PATTERN = re.compile(r"^(re:|aw:|fwd:|wg:|antw:)", re.IGNORECASE)
-    NON_FINANCE = re.compile(r"(your receipt|receipt|invoice|rechnung|quittung|railway|booking|order\s*#)", re.IGNORECASE)
+    NON_FINANCE = re.compile(
+        r"(your receipt|receipt|invoice|rechnung|quittung|railway|booking|order\s*#|"
+        r"newsletter|webinar|statusänderung|abgesagt|nausys|funnelcockpit|"
+        r"beitrag.*erhöhung|erhöhung.*beitrag|instagram|login|notification|"
+        r"mitteilungs.center|datenraum|angebotsbeziehung)", re.IGNORECASE
+    )
     FINANCE_HINT = re.compile(r"(finanzierung|baufinanz|darlehen|kredit|objekt|kaufpreis|eigenkapital|unterlagen)", re.IGNORECASE)
 
     # Interne E-Mail
     if from_email.endswith(OWN_DOMAIN):
-        is_reply = bool(REPLY_PATTERN.match(subject)) or bool(conversation_id)
-        if is_reply:
+        is_reply = bool(re.match(r"^(re:|aw:|antw:)", subject, re.IGNORECASE))
+        is_forward = bool(re.match(r"^(fwd:|wg:)", subject, re.IGNORECASE))
+        has_conv = bool(conversation_id)
+        has_finance = bool(FINANCE_HINT.search(subject))
+
+        # Forwards: nur mit Finance-Keyword durchlassen
+        if is_forward:
+            if has_finance:
+                return {"pass": True, "reason": None, "actor": "broker", "is_internal_reply": False}
+            return {"pass": False, "reason": "internal_forward_no_finance", "actor": None, "is_internal_reply": False}
+
+        # Replies: durchlassen (könnte Case-bezogene Antwort sein)
+        if is_reply or has_conv:
+            # Non-Finance Replies trotzdem blocken
+            if NON_FINANCE.search(subject) and not has_finance:
+                return {"pass": False, "reason": "internal_non_finance", "actor": None, "is_internal_reply": False}
             return {"pass": True, "reason": None, "actor": "broker", "is_internal_reply": True}
+
         # Neue interne Mail mit Finanz-Keyword → Broker leitet Anfrage weiter
-        if FINANCE_HINT.search(subject):
+        if has_finance:
             return {"pass": True, "reason": None, "actor": "broker", "is_internal_reply": False}
         return {"pass": False, "reason": "outgoing_system_mail", "actor": None, "is_internal_reply": False}
 
