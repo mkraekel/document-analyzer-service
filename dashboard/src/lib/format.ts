@@ -87,7 +87,9 @@ const FIELD_LABELS: Record<string, string> = {
   living_space: 'Wohnfläche',
   year_built: 'Baujahr',
   zinsbindung: 'Zinsbindung',
+  wunschrate: 'Wunschrate',
   partnerId: 'Partner-ID',
+  tippgeberPartnerId: 'Tippgeber Partner-ID',
   // Sonstige
   applicant_name: 'Antragsteller',
   partner_email: 'Partner E-Mail',

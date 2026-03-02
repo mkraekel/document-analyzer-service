@@ -1,8 +1,8 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, ExternalLink, RefreshCw, Check, FileText,
-  Mail, Clock, Shield, ChevronDown, ChevronUp, Pencil, X as XIcon, Save
+  Mail, Clock, Shield, ChevronDown, ChevronUp, Pencil, X as XIcon, Save, Eye
 } from 'lucide-react'
 import { useApiGet } from '../hooks/useApi'
 import { useToast } from '../hooks/useToast'
@@ -12,6 +12,96 @@ import { LoadingSpinner } from '../components/LoadingSpinner'
 import { formatTime, formatDateTime, fieldLabel, flattenObject } from '../lib/format'
 import { api } from '../api/client'
 import type { CaseDetail as CaseDetailType, CaseDocument } from '../types/api'
+
+function findValue(view: Record<string, unknown>, ...paths: string[]): string {
+  for (const path of paths) {
+    // Try flat key
+    if (path in view && view[path] !== undefined && view[path] !== null && view[path] !== '') {
+      return String(view[path])
+    }
+    // Try nested path
+    const parts = path.split('.')
+    if (parts.length > 1) {
+      let current: unknown = view
+      for (const part of parts) {
+        if (current && typeof current === 'object' && !Array.isArray(current)) {
+          current = (current as Record<string, unknown>)[part]
+        } else {
+          current = undefined
+          break
+        }
+      }
+      if (current !== undefined && current !== null && current !== '') {
+        return String(current)
+      }
+    }
+  }
+  return ''
+}
+
+const EUROPACE_GROUPS = [
+  {
+    title: 'Antragsteller',
+    fields: [
+      { key: 'salutation', paths: ['salutation'] },
+      { key: 'applicant_first_name', paths: ['applicant_first_name', 'applicant_data.first_name'] },
+      { key: 'applicant_last_name', paths: ['applicant_last_name', 'applicant_data.last_name'] },
+      { key: 'applicant_birth_date', paths: ['applicant_birth_date', 'applicant_data.birth_date'] },
+      { key: 'birth_place', paths: ['birth_place', 'applicant_data.birth_place'] },
+      { key: 'nationality', paths: ['nationality', 'applicant_data.nationality'] },
+      { key: 'tax_id', paths: ['tax_id', 'applicant_data.tax_id'] },
+      { key: 'phone', paths: ['phone', 'applicant_data.phone'] },
+    ],
+  },
+  {
+    title: 'Wohnadresse',
+    fields: [
+      { key: 'address_street', paths: ['address_street', 'address_data.street'] },
+      { key: 'address_house_number', paths: ['address_house_number', 'address_data.house_number'] },
+      { key: 'address_zip', paths: ['address_zip', 'address_data.zip'] },
+      { key: 'address_city', paths: ['address_city', 'address_data.city'] },
+    ],
+  },
+  {
+    title: 'Beschäftigung & Einkommen',
+    fields: [
+      { key: 'employment_type', paths: ['employment_type', 'applicant_data.employment_type'] },
+      { key: 'occupation', paths: ['occupation', 'applicant_data.occupation'] },
+      { key: 'employer', paths: ['employer', 'applicant_data.employer'] },
+      { key: 'employed_since', paths: ['employed_since', 'applicant_data.employed_since'] },
+      { key: 'net_income', paths: ['net_income', 'applicant_data.net_income'] },
+    ],
+  },
+  {
+    title: 'Objekt',
+    fields: [
+      { key: 'object_type', paths: ['object_type', 'property_data.object_type'] },
+      { key: 'usage', paths: ['usage', 'property_data.usage'] },
+      { key: 'property_street', paths: ['property_street', 'property_data.street'] },
+      { key: 'property_zip', paths: ['property_zip', 'property_data.zip'] },
+      { key: 'property_city', paths: ['property_city', 'property_data.city'] },
+      { key: 'living_space', paths: ['living_space', 'property_data.living_space'] },
+      { key: 'year_built', paths: ['year_built', 'property_data.year_built'] },
+    ],
+  },
+  {
+    title: 'Finanzierung',
+    fields: [
+      { key: 'purchase_price', paths: ['purchase_price', 'property_data.purchase_price'] },
+      { key: 'loan_amount', paths: ['loan_amount', 'financing_data.loan_amount'] },
+      { key: 'equity_to_use', paths: ['equity_to_use', 'financing_data.equity_to_use'] },
+      { key: 'zinsbindung', paths: ['zinsbindung'] },
+      { key: 'wunschrate', paths: ['wunschrate'] },
+    ],
+  },
+  {
+    title: 'Vermittler',
+    fields: [
+      { key: 'partnerId', paths: ['partnerId'] },
+      { key: 'tippgeberPartnerId', paths: ['tippgeberPartnerId'] },
+    ],
+  },
+]
 
 export function CaseDetail() {
   const { caseId } = useParams<{ caseId: string }>()
@@ -33,6 +123,12 @@ export function CaseDetail() {
       return next
     })
   }, [])
+
+  useEffect(() => {
+    if (caseData?.status === 'READY_FOR_IMPORT') {
+      setExpandedSections(prev => new Set([...prev, 'europace']))
+    }
+  }, [caseData?.status])
 
   async function doAction(action: string) {
     setBusy(true)
@@ -103,6 +199,11 @@ export function CaseDetail() {
   const answers = c.answers_user || {}
   const overrides = c.manual_overrides || {}
   const flatFacts = flattenObject(facts)
+  const effectiveView = (readiness.effective_view || {}) as Record<string, unknown>
+  const missingFields = new Set([
+    ...(readiness.missing_financing || []),
+    ...(readiness.missing_applicant_data || []),
+  ])
 
   // Deduplicate documents
   const docMap = new Map<string, CaseDocument>()
@@ -335,6 +436,42 @@ export function CaseDetail() {
           onSaved={refetch}
           addToast={addToast}
         />
+      </Section>
+
+      {/* Europace Preview */}
+      <Section
+        title="Europace-Vorschau"
+        icon={<Eye size={18} />}
+        isOpen={expandedSections.has('europace')}
+        onToggle={() => toggleSection('europace')}
+      >
+        {EUROPACE_GROUPS.map(group => (
+          <div key={group.title} className="mb-5 last:mb-0">
+            <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
+              {group.title}
+            </h4>
+            <div className="grid gap-1">
+              {group.fields.map(field => {
+                const val = findValue(effectiveView, ...field.paths)
+                const isMissing = missingFields.has(field.key)
+                return (
+                  <div key={field.key} className="flex items-center justify-between py-1.5 px-3 rounded bg-gray-50">
+                    <span className="text-xs font-medium text-gray-500">{fieldLabel(field.key)}</span>
+                    <span className={`text-sm ${
+                      val
+                        ? 'text-gray-900'
+                        : isMissing
+                          ? 'text-orange-500 font-medium'
+                          : 'text-gray-300'
+                    }`}>
+                      {val || '–'}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        ))}
       </Section>
 
       {/* Documents */}
