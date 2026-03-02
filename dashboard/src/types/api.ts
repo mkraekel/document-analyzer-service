@@ -32,6 +32,7 @@ export interface CaseListItem {
   total_docs_required: number
   overrides_applied: string[]
   is_complete: boolean
+  completeness_pct: number
 }
 
 export interface CaseDocument {

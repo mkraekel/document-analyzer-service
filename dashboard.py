@@ -64,7 +64,11 @@ async def dashboard_stats():
             "emails_total": emails_total,
             "emails_by_result": emails_by_result,
             "documents_total": docs_total,
-            "triage_count": emails_by_result.get("no_case_match", 0),
+            "triage_count": (
+                emails_by_result.get("no_case_match", 0)
+                + emails_by_result.get("triage", 0)
+                + emails_by_result.get("irrelevant", 0)
+            ),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -148,6 +152,7 @@ async def dashboard_cases():
                 "total_docs_required": len(readiness.get("missing_docs", [])),
                 "overrides_applied": readiness.get("manual_overrides_applied", []),
                 "is_complete": readiness.get("is_complete", False),
+                "completeness_pct": readiness.get("completeness_percent", 0),
             })
         return {"cases": items}
     except Exception as e:

@@ -66,23 +66,35 @@ export function Cases() {
               onClick={() => navigate(`/app/cases/${c.case_id}`)}
               className="w-full bg-white rounded-xl border border-gray-200 p-5 text-left hover:shadow-md transition-shadow"
             >
-              <div className="flex items-start justify-between gap-4">
+              <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 sm:gap-4">
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-3 mb-2">
-                    <span className="font-semibold text-gray-900">
+                  <div className="flex items-center gap-3 mb-1">
+                    <span className="font-semibold text-gray-900 truncate">
                       {c.applicant_name || 'Unbekannt'}
                     </span>
                     <StatusBadge status={c.status} />
                   </div>
-                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-500">
-                    {c.partner_email && <span>{c.partner_email}</span>}
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-500">
+                    {c.partner_email && <span className="truncate">{c.partner_email}</span>}
                     <span title={c.last_status_change}>{formatTime(c.last_status_change)}</span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="w-16 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                        <span
+                          className={`block h-full rounded-full ${
+                            c.completeness_pct >= 100 ? 'bg-green-500' :
+                            c.completeness_pct >= 60 ? 'bg-yellow-500' : 'bg-orange-500'
+                          }`}
+                          style={{ width: `${c.completeness_pct}%` }}
+                        />
+                      </span>
+                      <span className="text-xs text-gray-400">{c.completeness_pct}%</span>
+                    </span>
                   </div>
                 </div>
 
                 {/* Completeness indicator */}
                 {!c.is_complete && (
-                  <div className="text-right shrink-0">
+                  <div className="sm:text-right shrink-0">
                     {c.missing_financing.length > 0 && (
                       <div className="text-xs text-orange-600 mb-1">
                         Fehlende Daten: {c.missing_financing.map(f => fieldLabel(f)).join(', ')}
