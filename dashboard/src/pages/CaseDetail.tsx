@@ -225,7 +225,7 @@ export function CaseDetail() {
           <div className="mb-4">
             <h4 className="text-sm font-medium text-orange-700 mb-2">Fehlende Antragstellerdaten</h4>
             <div className="flex flex-wrap gap-2">
-              {readiness.missing_applicant_data.map((f: string) => (
+              {(readiness.missing_applicant_data ?? []).map((f: string) => (
                 <span key={f} className="bg-orange-50 text-orange-700 text-xs px-2.5 py-1 rounded-full">
                   {fieldLabel(f)}
                 </span>
@@ -297,7 +297,7 @@ export function CaseDetail() {
           <div className="mb-4">
             <h4 className="text-sm font-medium text-blue-700 mb-2">Empfohlene Daten (nicht blockierend)</h4>
             <div className="flex flex-wrap gap-2">
-              {readiness.recommended_missing.map((f: string) => (
+              {(readiness.recommended_missing ?? []).map((f: string) => (
                 <span key={f} className="bg-blue-50 text-blue-700 text-xs px-2.5 py-1 rounded-full">
                   {fieldLabel(f)}
                 </span>
