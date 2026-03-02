@@ -17,7 +17,7 @@ from typing import Optional
 import seatable as db
 import case_logic as cases
 import readiness as rdns
-from readiness import _compute_effective_view
+from readiness import _compute_effective_view, _find_value, KEY_SEARCH_PATHS
 import notify
 
 N8N_SCAN_WEBHOOK = os.getenv("N8N_SCAN_WEBHOOK", "")
@@ -180,7 +180,14 @@ async def dashboard_case_detail(case_id: str):
         overrides = case.get("_manual_overrides", {})
         readiness = case.get("_readiness", {})
         # Always compute fresh effective_view from current facts/answers/overrides
-        readiness["effective_view"] = _compute_effective_view(case)
+        view = _compute_effective_view(case)
+        # Resolve KEY_SEARCH_PATHS so canonical field names are always present
+        for key in KEY_SEARCH_PATHS:
+            if key not in view or view[key] is None or view[key] == "":
+                val = _find_value(view, key)
+                if val is not None and val != "":
+                    view[key] = val
+        readiness["effective_view"] = view
         audit = case.get("_audit_log", [])
         conv_ids = case.get("_conversation_ids", [])
 

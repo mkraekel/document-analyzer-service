@@ -2542,12 +2542,17 @@ def _map_extracted_to_facts(doc_type: str, extracted: dict,
     suffix = "" if is_primary else "_2"
 
     if doc_type in ("Ausweiskopie",):
+        _vorname = extracted.get("Vorname")
+        _nachname = extracted.get("Nachname")
+        _gebdat = extracted.get("Geburtsdatum")
+        _gebort = extracted.get("Geburtsort")
+        _nat = extracted.get("Nationalität") or extracted.get("Nationalitaet")
         facts[f"applicant_data{suffix}"] = {
-            "vorname": extracted.get("Vorname"),
-            "nachname": extracted.get("Nachname"),
-            "geburtsdatum": extracted.get("Geburtsdatum"),
-            "geburtsort": extracted.get("Geburtsort"),
-            "nationalitaet": extracted.get("Nationalität") or extracted.get("Nationalitaet"),
+            "first_name": _vorname, "vorname": _vorname,
+            "last_name": _nachname, "nachname": _nachname,
+            "birth_date": _gebdat, "geburtsdatum": _gebdat,
+            "birth_place": _gebort, "geburtsort": _gebort,
+            "nationality": _nat, "nationalitaet": _nat,
         }
         facts[f"id_data{suffix}"] = {
             "ausweisnummer": extracted.get("Ausweisnummer"),
@@ -2555,14 +2560,25 @@ def _map_extracted_to_facts(doc_type: str, extracted: dict,
         }
 
     elif doc_type in ("Gehaltsnachweis", "Gehaltsabrechnung", "Gehaltsabrechnung Dezember", "Lohnsteuerbescheinigung"):
+        _arbeitgeber = extracted.get("Arbeitgeber")
+        _netto = extracted.get("Netto")
         facts[f"income_data{suffix}"] = {
-            "arbeitgeber": extracted.get("Arbeitgeber"),
+            "arbeitgeber": _arbeitgeber,
+            "employer": _arbeitgeber,
             "brutto": extracted.get("Brutto"),
-            "netto": extracted.get("Netto"),
+            "netto": _netto,
+            "net_income": _netto,
             "steuerklasse": extracted.get("Steuerklasse"),
         }
         facts[f"employment_data{suffix}"] = {
-            "arbeitgeber": extracted.get("Arbeitgeber"),
+            "arbeitgeber": _arbeitgeber,
+            "employer": _arbeitgeber,
+            "employment_type": "Angestellter",
+        }
+        # Also write to applicant_data so KEY_SEARCH_PATHS can find it
+        facts[f"applicant_data{suffix}"] = {
+            "employer": _arbeitgeber,
+            "net_income": _netto,
             "employment_type": "Angestellter",
         }
 
@@ -2580,18 +2596,24 @@ def _map_extracted_to_facts(doc_type: str, extracted: dict,
             "purchase_price": extracted.get("Kaufpreis") or extracted.get("purchase_price"),
             "address": extracted.get("Adresse"),
             "object_type": extracted.get("Objekttyp") or extracted.get("object_type"),
-            "living_area": extracted.get("Wohnfläche"),
+            "usage": extracted.get("Nutzungsart") or extracted.get("usage"),
+            "living_space": extracted.get("Wohnfläche"),
             "year_built": extracted.get("Baujahr"),
         }
 
     elif doc_type in ("Selbstauskunft",):
+        _vorname = extracted.get("Vorname") or extracted.get("applicant_first_name")
+        _nachname = extracted.get("Nachname") or extracted.get("applicant_last_name")
+        _telefon = extracted.get("Telefon") or extracted.get("applicant_phone")
+        _gebdat = extracted.get("Geburtsdatum")
+        _famstand = extracted.get("Familienstand")
         facts[f"applicant_data{suffix}"] = {
-            "vorname": extracted.get("Vorname") or extracted.get("applicant_first_name"),
-            "nachname": extracted.get("Nachname") or extracted.get("applicant_last_name"),
+            "first_name": _vorname, "vorname": _vorname,
+            "last_name": _nachname, "nachname": _nachname,
+            "phone": _telefon, "telefon": _telefon,
             "email": extracted.get("E-Mail") or extracted.get("applicant_email"),
-            "telefon": extracted.get("Telefon") or extracted.get("applicant_phone"),
-            "geburtsdatum": extracted.get("Geburtsdatum"),
-            "familienstand": extracted.get("Familienstand"),
+            "birth_date": _gebdat, "geburtsdatum": _gebdat,
+            "marital_status": _famstand, "familienstand": _famstand,
         }
         if not suffix:  # Adresse nur für Hauptantragsteller
             facts["address_data"] = {
