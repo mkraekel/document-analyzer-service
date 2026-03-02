@@ -2203,6 +2203,13 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
     is_new = match["action"] == "create"
     needs_folder = False
 
+    # 4b. Kein Case erstellen ohne Antragstellername → Triage
+    if match["action"] == "create" and not applicant_name:
+        logger.info(f"No applicant name found, redirecting to triage: {request.subject}")
+        db.log_processed_email(request.provider_message_id, parsed.get("mail_type", "new_request"), "triage",
+                               parsed_result=parsed, matched_by="no_applicant_name", **_log_kwargs)
+        return {"action": "triage", "reason": "no_applicant_name"}
+
     # 5. Case erstellen oder aktualisieren
     if match["action"] == "create":
         facts = {
