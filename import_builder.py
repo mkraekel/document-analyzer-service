@@ -100,6 +100,77 @@ def _clean_payload(obj):
     return obj
 
 
+def _normalize_effective_view(view: dict) -> dict:
+    """
+    Uebersetzt deutsche Keys aus GPT-Extraktion auf die englischen Keys,
+    die der Payload Builder erwartet. Arbeitet in-place auf einer Kopie.
+    Nur fehlende EN-Keys werden befuellt (bestehende haben Vorrang).
+    """
+    import copy
+    v = copy.deepcopy(view)
+
+    # Mapping pro Person-Suffix ("" = primary, "_2" = partner)
+    for suffix in ("", "_2"):
+        app = f"applicant_data{suffix}"
+        inc = f"income_data{suffix}"
+        emp = f"employment_data{suffix}"
+
+        app_dict = v.get(app, {})
+        inc_dict = v.get(inc, {})
+        emp_dict = v.get(emp, {})
+
+        # --- applicant_data: DE -> EN ---
+        de_en_map = {
+            "vorname": "first_name",
+            "nachname": "last_name",
+            "geburtsdatum": "birth_date",
+            "geburtsort": "birth_place",
+            "nationalitaet": "nationality",
+            "telefon": "phone",
+        }
+        for de_key, en_key in de_en_map.items():
+            if not app_dict.get(en_key) and app_dict.get(de_key):
+                app_dict[en_key] = app_dict[de_key]
+
+        # --- Cross-section: income_data / employment_data -> applicant_data ---
+        if not app_dict.get("net_income"):
+            net = inc_dict.get("netto") or inc_dict.get("net_income")
+            if net:
+                app_dict["net_income"] = net
+
+        if not app_dict.get("employer"):
+            employer = (
+                inc_dict.get("arbeitgeber")
+                or emp_dict.get("arbeitgeber")
+                or emp_dict.get("employer")
+            )
+            if employer:
+                app_dict["employer"] = employer
+
+        if not app_dict.get("employment_type"):
+            etype = emp_dict.get("employment_type")
+            if etype:
+                app_dict["employment_type"] = etype
+
+        if app_dict:
+            v[app] = app_dict
+
+    # --- household_data: familienstand ---
+    hh = v.get("household_data", {})
+    app_main = v.get("applicant_data", {})
+    if not hh.get("marital_status") and app_main.get("familienstand"):
+        hh["marital_status"] = app_main["familienstand"]
+        v["household_data"] = hh
+
+    # --- property_data: living_area -> living_space ---
+    prop = v.get("property_data", {})
+    if not prop.get("living_space") and prop.get("living_area"):
+        prop["living_space"] = prop["living_area"]
+        v["property_data"] = prop
+
+    return v
+
+
 def _get_value(effective_view: dict, primary: str, *fallbacks):
     """Holt einen Wert aus dem Effective View mit Fallback-Pfaden."""
     val = _get_nested(effective_view, primary)
@@ -131,6 +202,7 @@ def build_europace_payload(case_id: str) -> dict:
         )
 
     view = _compute_effective_view(case)
+    view = _normalize_effective_view(view)  # DE → EN key translation
 
     def gv(primary, *fallbacks):
         return _get_value(view, primary, *fallbacks)
