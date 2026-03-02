@@ -2823,6 +2823,23 @@ async def admin_delete_case(request: dict):
     return {"deleted": results, "case_id": case_id}
 
 
+@app.post("/admin/cleanup-emails")
+async def admin_cleanup_emails():
+    """Löscht irrelevante E-Mail-Logs (sender_not_allowlisted, skipped, no_case_match ohne Case)."""
+    import db_postgres as _pg
+    results = {}
+    for result_type in ("sender_not_allowlisted", "no_case_match", "skipped", "irrelevant", "outgoing_system_mail",
+                        "internal_forward_no_finance", "internal_non_finance"):
+        try:
+            with _pg._get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM processed_emails WHERE processing_result = %s", (result_type,))
+                    results[result_type] = cur.rowcount
+        except Exception as e:
+            results[result_type] = f"error: {e}"
+    return {"cleaned": results}
+
+
 @app.post("/admin/clear-db")
 async def admin_clear_db():
     """Loescht ALLE Daten aus allen Tabellen. Nur fuer Development/Testing."""
