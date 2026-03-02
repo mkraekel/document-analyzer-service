@@ -60,7 +60,7 @@ export function Triage() {
 
   async function handleAssign(msgId: string) {
     const caseId = assignCase[msgId]
-    if (!caseId) return addToast('Bitte Case auswaehlen', 'error')
+    if (!caseId) return addToast('Bitte Case auswählen', 'error')
     markBusy(msgId, true)
     try {
       await api.post('/api/dashboard/assign', { provider_message_id: msgId, case_id: caseId })
@@ -163,7 +163,7 @@ export function Triage() {
                       <span title={email.processed_at}>{formatTime(email.processed_at)}</span>
                       {email.attachments_count > 0 && (
                         <span className="bg-gray-100 px-1.5 py-0.5 rounded">
-                          {email.attachments_count} Anhaenge
+                          {email.attachments_count} Anhänge
                         </span>
                       )}
                     </div>
@@ -200,7 +200,7 @@ export function Triage() {
                           onChange={e => setAssignCase(prev => ({ ...prev, [email.provider_message_id]: e.target.value }))}
                           className="text-sm border border-gray-300 rounded-lg px-3 py-2 bg-white"
                         >
-                          <option value="">Case waehlen...</option>
+                          <option value="">Case wählen...</option>
                           {cases.map(c => (
                             <option key={c.case_id} value={c.case_id}>
                               {c.applicant_name || c.case_id}

@@ -57,7 +57,7 @@ export function Overview() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold text-gray-900 mb-6">Uebersicht</h1>
+      <h1 className="text-2xl font-bold text-gray-900 mb-6">Übersicht</h1>
 
       {/* Stat Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">

@@ -128,7 +128,7 @@ export function CaseDetail() {
         className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-4"
       >
         <ArrowLeft size={16} />
-        Zurueck
+        Zurück
       </button>
 
       <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
@@ -167,7 +167,7 @@ export function CaseDetail() {
               className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors"
             >
               <RefreshCw size={14} />
-              Erneut pruefen
+              Erneut prüfen
             </button>
             <button
               onClick={() => doAction('FREIGABE')}
@@ -180,16 +180,16 @@ export function CaseDetail() {
             {c.status === 'READY_FOR_IMPORT' && (
               <>
                 <button
-                  onClick={() => doImport(true)}
-                  disabled={busy}
-                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-blue-300 text-blue-700 rounded-lg hover:bg-blue-50 disabled:opacity-50 transition-colors"
+                  disabled
+                  title="Europace API-Key noch nicht konfiguriert"
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-gray-200 text-gray-400 rounded-lg cursor-not-allowed"
                 >
                   Dry-Run Import
                 </button>
                 <button
-                  onClick={() => doImport(false)}
-                  disabled={busy}
-                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                  disabled
+                  title="Europace API-Key noch nicht konfiguriert"
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium bg-gray-300 text-gray-500 rounded-lg cursor-not-allowed"
                 >
                   Import starten
                 </button>
@@ -249,7 +249,7 @@ export function CaseDetail() {
                     disabled={busy}
                     className="text-xs text-gray-500 hover:text-gray-700 disabled:opacity-50"
                   >
-                    Nicht benoetigt
+                    Nicht benötigt
                   </button>
                 </div>
               ))}
@@ -346,9 +346,9 @@ export function CaseDetail() {
         actions={
           c.onedrive_folder_id ? (
             <button
-              onClick={scanDocuments}
-              disabled={busy}
-              className="text-xs text-blue-600 hover:text-blue-800 disabled:opacity-50"
+              disabled
+              title="Scan-Webhook noch nicht konfiguriert"
+              className="text-xs text-gray-400 cursor-not-allowed"
             >
               Dokumente scannen
             </button>
@@ -497,7 +497,7 @@ export function CaseDetail() {
         onToggle={() => toggleSection('audit')}
       >
         {(c.audit_log || []).length === 0 ? (
-          <p className="text-sm text-gray-500">Keine Eintraege</p>
+          <p className="text-sm text-gray-500">Keine Einträge</p>
         ) : (
           <div className="space-y-1">
             {c.audit_log.slice(0, 20).map((entry, i) => (

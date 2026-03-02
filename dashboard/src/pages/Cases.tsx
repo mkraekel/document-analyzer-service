@@ -96,7 +96,7 @@ export function Cases() {
                   </div>
                 )}
                 {c.is_complete && (
-                  <div className="text-xs text-green-600 font-medium">Vollstaendig</div>
+                  <div className="text-xs text-green-600 font-medium">Vollständig</div>
                 )}
               </div>
             </button>
