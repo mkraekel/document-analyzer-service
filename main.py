@@ -32,6 +32,7 @@ except Exception as e:
     logger.warning(f"dotenv not available: {e}")
 
 from pypdf import PdfReader
+import fitz  # PyMuPDF - PDF to image for scanned docs
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
@@ -204,15 +205,32 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> tuple[str, int]:
         return "", 0
 
 
+def pdf_pages_to_images(pdf_bytes: bytes, max_pages: int = 2, dpi: int = 200) -> list[tuple[bytes, str]]:
+    """Rendert PDF-Seiten als PNG-Bilder (für gescannte Dokumente)."""
+    images = []
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        for i in range(min(len(doc), max_pages)):
+            pix = doc[i].get_pixmap(dpi=dpi)
+            images.append((pix.tobytes("png"), "image/png"))
+        doc.close()
+    except Exception as e:
+        logger.error(f"PDF-to-image Konvertierung fehlgeschlagen: {e}")
+    return images
+
+
 # Filename-Keywords → doc_type Mapping (Fallback wenn GPT "Sonstiges" sagt)
 FILENAME_DOC_TYPE_HINTS = {
     "selbstauskunft": "Selbstauskunft",
     "schufa": "Selbstauskunft",
     "gehaltsnachweis": "Gehaltsnachweis",
     "gehaltsabrechnung": "Gehaltsnachweis",
+    "gehaltsab": "Gehaltsnachweis",
     "lohnabrechnung": "Gehaltsnachweis",
     "entgeltnachweis": "Gehaltsnachweis",
     "entgeltabrechnung": "Gehaltsnachweis",
+    "bezügemitteilung": "Gehaltsnachweis",
+    "verdienstbescheinigung": "Gehaltsnachweis",
     "kontoauszug": "Kontoauszug",
     "kontoauszüge": "Kontoauszug",
     "ausweis": "Ausweiskopie",
@@ -226,6 +244,7 @@ FILENAME_DOC_TYPE_HINTS = {
     "steuererklaerung": "Steuererklärung",
     "einkommensteuer": "Steuererklärung",
     "lohnsteuerbescheinigung": "Lohnsteuerbescheinigung",
+    "lohnsteuerbesch": "Lohnsteuerbescheinigung",
     "grundbuch": "Grundbuch",
     "grundbuchauszug": "Grundbuch",
     "exposé": "Exposé",
@@ -291,18 +310,29 @@ def analyze_with_gpt4o(file_bytes: bytes, mime_type: str, filename: str) -> dict
             }]
             model = "gpt-4o-mini"  # Günstiger für Text-Only
         else:
-            # PDF ohne Text (gescannt) - Filename-Fallback versuchen
-            fallback_type = _filename_fallback_doc_type(filename)
-            if fallback_type:
-                logger.info(f"PDF {filename} hat keinen Text, aber Filename-Fallback: {fallback_type}")
+            # PDF ohne Text (gescannt) → als Bild rendern und Vision API nutzen
+            page_images = pdf_pages_to_images(file_bytes, max_pages=2)
+            if page_images:
+                logger.info(f"Scan-PDF {filename}: {len(page_images)} Seiten als Bilder gerendert → Vision API")
+                content = [{"type": "text", "text": f"{prompt}\n\nDokument: {filename}"}]
+                for img_bytes_page, img_mime in page_images:
+                    b64 = base64.standard_b64encode(img_bytes_page).decode("utf-8")
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{img_mime};base64,{b64}", "detail": "high"}
+                    })
+                messages = [{"role": "user", "content": content}]
+                model = "gpt-4o"
             else:
-                logger.warning(f"PDF {filename} hat keinen extrahierbaren Text - Scan-Dokument?")
-            return {
-                "doc_type": fallback_type or "Sonstiges",
-                "confidence": "low" if not fallback_type else "medium",
-                "error": "PDF enthält keinen extrahierbaren Text. Bitte als Bild hochladen." if not fallback_type else None,
-                "meta": {"requires_ocr": True, "filename_fallback": bool(fallback_type)}
-            }
+                # Konvertierung fehlgeschlagen - Filename-Fallback
+                fallback_type = _filename_fallback_doc_type(filename)
+                logger.warning(f"PDF {filename}: kein Text, Bild-Rendering fehlgeschlagen. Fallback: {fallback_type}")
+                return {
+                    "doc_type": fallback_type or "Sonstiges",
+                    "confidence": "low",
+                    "error": "PDF ohne Text, Bild-Konvertierung fehlgeschlagen",
+                    "meta": {"requires_ocr": True, "filename_fallback": bool(fallback_type)}
+                }
     else:
         # Bilder: Vision-Analyse
         logger.info(f"Nutze Vision-Analyse für Bild: {filename}")
