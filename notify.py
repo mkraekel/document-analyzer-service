@@ -124,25 +124,39 @@ def _generate_questions_with_ai(
     effective_view: dict,
     recipient: str,  # "partner" oder "broker"
     language: str = "de",
+    missing_applicant_data: list = None,
 ) -> str:
     """Generiert natürlichsprachliche Fragen per GPT-4o-mini"""
 
     applicant_name = effective_view.get("applicant_name") or effective_view.get("applicant_first_name", "")
     case_summary = []
 
-    # Fehlende Finanzierungsdaten: technische Keys in deutsche Labels uebersetzen
-    FINANCING_LABELS = {
+    # Fehlende Daten: technische Keys in deutsche Labels uebersetzen
+    DATA_LABELS = {
         "purchase_price": "Kaufpreis",
         "loan_amount": "Darlehenssumme",
         "equity_to_use": "einzusetzendes Eigenkapital",
         "object_type": "Objektart (z.B. ETW, Haus)",
         "usage": "Nutzungsart (Eigennutzung/Kapitalanlage)",
         "employment_type": "Beschäftigungsart",
+        "applicant_first_name": "Vorname des Antragstellers",
+        "applicant_last_name": "Nachname des Antragstellers",
+        "applicant_birth_date": "Geburtsdatum",
+        "net_income": "Nettoeinkommen",
+        "address_street": "Straße (Wohnadresse)",
+        "address_house_number": "Hausnummer (Wohnadresse)",
+        "address_zip": "PLZ (Wohnadresse)",
+        "address_city": "Wohnort",
+        "self_employed_since": "Selbstständig seit",
+        "profit_last_year": "Gewinn Vorjahr",
     }
 
     if missing_financing:
-        translated = [FINANCING_LABELS.get(f, f) for f in missing_financing]
+        translated = [DATA_LABELS.get(f, f) for f in missing_financing]
         case_summary.append(f"Fehlende Finanzierungsdaten: {', '.join(translated)}")
+    if missing_applicant_data:
+        translated = [DATA_LABELS.get(f, f) for f in missing_applicant_data]
+        case_summary.append(f"Fehlende Antragstellerdaten: {', '.join(translated)}")
     if missing_docs:
         doc_list = ", ".join(f"{d['type']} ({d['required']}x benötigt, {d['found']}x vorhanden)" for d in missing_docs)
         case_summary.append(f"Fehlende Dokumente: {doc_list}")
@@ -230,6 +244,7 @@ def send_partner_questions(case_id: str, partner_email: str, readiness_result: d
         stale_docs=readiness_result.get("stale_docs", []),
         effective_view=effective_view,
         recipient="partner",
+        missing_applicant_data=readiness_result.get("missing_applicant_data", []),
     )
 
     if not body:
@@ -450,6 +465,7 @@ def send_reminder(case_id: str, readiness_result: dict, reminder_count: int, tar
             stale_docs=readiness_result.get("stale_docs", []),
             effective_view=view,
             recipient="partner",
+            missing_applicant_data=readiness_result.get("missing_applicant_data", []),
         )
         if not body:
             logger.info(f"Reminder für {case_id}: kein Body generiert, überspringe")

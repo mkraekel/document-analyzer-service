@@ -50,12 +50,45 @@ export function flattenObject(
 }
 
 const FIELD_LABELS: Record<string, string> = {
+  // Finanzierungsdaten
   purchase_price: 'Kaufpreis',
   loan_amount: 'Darlehenssumme',
   equity_to_use: 'Eigenkapital',
   object_type: 'Objektart',
   usage: 'Nutzungsart',
+  // Antragsteller Stammdaten
+  applicant_first_name: 'Vorname',
+  applicant_last_name: 'Nachname',
+  applicant_birth_date: 'Geburtsdatum',
   employment_type: 'Beschaeftigungsart',
+  net_income: 'Nettoeinkommen',
+  // Wohnadresse
+  address_street: 'Strasse',
+  address_house_number: 'Hausnummer',
+  address_zip: 'PLZ',
+  address_city: 'Ort',
+  // Selbststaendige Zusatz
+  self_employed_since: 'Selbststaendig seit',
+  profit_last_year: 'Gewinn Vorjahr',
+  // Empfohlene Felder
+  salutation: 'Anrede',
+  birth_place: 'Geburtsort',
+  nationality: 'Staatsangehoerigkeit',
+  tax_id: 'Steuer-ID',
+  phone: 'Telefon',
+  occupation: 'Beruf',
+  employer: 'Arbeitgeber',
+  employed_since: 'Beschaeftigt seit',
+  marital_status: 'Familienstand',
+  children: 'Kinder',
+  property_street: 'Objektadresse Strasse',
+  property_city: 'Objektadresse Ort',
+  property_zip: 'Objektadresse PLZ',
+  living_space: 'Wohnflaeche',
+  year_built: 'Baujahr',
+  zinsbindung: 'Zinsbindung',
+  partnerId: 'Partner-ID',
+  // Sonstige
   applicant_name: 'Antragsteller',
   partner_email: 'Partner E-Mail',
   'property_data.purchase_price': 'Kaufpreis',

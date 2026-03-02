@@ -27,6 +27,7 @@ export interface CaseListItem {
   onedrive_folder_id: string
   last_status_change: string
   missing_financing: string[]
+  missing_applicant_data: string[]
   missing_docs_count: number
   total_docs_required: number
   overrides_applied: string[]
@@ -81,10 +82,12 @@ export interface CaseDetail {
 export interface ReadinessResult {
   status: string
   missing_financing: string[]
+  missing_applicant_data?: string[]
   missing_broker?: string[]
   missing_docs: MissingDoc[]
   stale_docs: StaleDoc[]
   warnings: string[]
+  recommended_missing?: string[]
   manual_overrides_applied: string[]
   effective_view: Record<string, unknown>
 }

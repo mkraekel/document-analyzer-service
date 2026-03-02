@@ -220,6 +220,20 @@ export function CaseDetail() {
           </div>
         )}
 
+        {/* Missing Applicant Data */}
+        {(readiness.missing_applicant_data || []).length > 0 && (
+          <div className="mb-4">
+            <h4 className="text-sm font-medium text-orange-700 mb-2">Fehlende Antragstellerdaten</h4>
+            <div className="flex flex-wrap gap-2">
+              {readiness.missing_applicant_data.map((f: string) => (
+                <span key={f} className="bg-orange-50 text-orange-700 text-xs px-2.5 py-1 rounded-full">
+                  {fieldLabel(f)}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Missing Docs */}
         {(readiness.missing_docs || []).length > 0 && (
           <div className="mb-4">
@@ -278,8 +292,23 @@ export function CaseDetail() {
           </div>
         )}
 
+        {/* Recommended Missing */}
+        {(readiness.recommended_missing || []).length > 0 && (
+          <div className="mb-4">
+            <h4 className="text-sm font-medium text-blue-700 mb-2">Empfohlene Daten (nicht blockierend)</h4>
+            <div className="flex flex-wrap gap-2">
+              {readiness.recommended_missing.map((f: string) => (
+                <span key={f} className="bg-blue-50 text-blue-700 text-xs px-2.5 py-1 rounded-full">
+                  {fieldLabel(f)}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* All good */}
         {!(readiness.missing_financing || []).length &&
+         !(readiness.missing_applicant_data || []).length &&
          !(readiness.missing_docs || []).length &&
          !(readiness.stale_docs || []).length && (
           <p className="text-sm text-green-600 font-medium">Alle Checks bestanden</p>

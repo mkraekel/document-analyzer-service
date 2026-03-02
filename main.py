@@ -166,8 +166,10 @@ Für Kontoauszüge:
 - Regelmäßige Eingänge/Ausgänge
 
 Für Selbstauskunft:
-- Alle persönlichen Daten, Adresse, Kontaktdaten
-- Familienstatus, Kinder, Beruf, Einkommen
+- Vorname, Nachname, Geburtsdatum, Familienstand
+- Telefon, E-Mail
+- Strasse, Hausnummer, PLZ, Ort (Wohnadresse)
+- Beruf, Einkommen
 
 Für Immobilien-Dokumente (Exposé, Grundbuch, etc.):
 - Adresse, Wohnfläche, Baujahr, Objekttyp
@@ -456,11 +458,26 @@ async def health_check():
 # ============================================
 
 QUESTION_TEMPLATES = {
+    # Finanzierungsdaten
     "purchase_price": {"question": "Wie hoch ist der Kaufpreis der Immobilie?", "example": "z.B. 350000"},
     "loan_amount": {"question": "Wie hoch soll das Darlehen sein?", "example": "z.B. 280000"},
     "equity_to_use": {"question": "Wie viel Eigenkapital soll eingesetzt werden?", "example": "z.B. 70000"},
     "object_type": {"question": "Um welche Art von Immobilie handelt es sich?", "example": "ETW, EFH, DHH, RH, MFH"},
     "usage": {"question": "Wie soll die Immobilie genutzt werden?", "example": "Eigennutzung oder Kapitalanlage"},
+    # Antragsteller Stammdaten
+    "applicant_first_name": {"question": "Wie lautet der Vorname des Antragstellers?", "example": "z.B. Max"},
+    "applicant_last_name": {"question": "Wie lautet der Nachname des Antragstellers?", "example": "z.B. Mustermann"},
+    "applicant_birth_date": {"question": "Was ist das Geburtsdatum des Antragstellers?", "example": "Format: JJJJ-MM-TT"},
+    "employment_type": {"question": "Welche Beschäftigungsart liegt vor?", "example": "Angestellter, Selbstständig, Beamter, Rentner"},
+    "net_income": {"question": "Wie hoch ist das monatliche Nettoeinkommen?", "example": "z.B. 3500"},
+    # Wohnadresse
+    "address_street": {"question": "Wie lautet die Straße der Wohnadresse?", "example": "z.B. Musterstraße"},
+    "address_house_number": {"question": "Wie lautet die Hausnummer?", "example": "z.B. 12a"},
+    "address_zip": {"question": "Wie lautet die PLZ der Wohnadresse?", "example": "z.B. 60311"},
+    "address_city": {"question": "Wie lautet der Wohnort?", "example": "z.B. Frankfurt"},
+    # Selbstständige Zusatz
+    "self_employed_since": {"question": "Seit wann ist der Antragsteller selbstständig?", "example": "Format: JJJJ-MM-TT"},
+    "profit_last_year": {"question": "Wie hoch war der Gewinn im Vorjahr?", "example": "z.B. 65000"},
 }
 
 
@@ -543,9 +560,11 @@ class ReadinessResponse(BaseModel):
     new_status: str
     completeness_percent: int
     missing_required: list
+    missing_applicant_data: list
     missing_docs: list
     stale_docs: list
     warnings: list
+    recommended_missing: list
     questions_partner: list
     questions_broker: list
     next_action: Optional[str] = None
@@ -563,6 +582,7 @@ async def check_readiness_endpoint(request: ReadinessRequest):
 
     # Map readiness.py result → ReadinessResponse format
     missing_financing = result.get("missing_financing", [])
+    missing_applicant_data = result.get("missing_applicant_data", [])
     missing_docs_raw = result.get("missing_docs", [])
 
     # missing_docs: readiness.py liefert dicts, Endpoint erwartet Strings
@@ -579,9 +599,9 @@ async def check_readiness_endpoint(request: ReadinessRequest):
         else:
             missing_docs_str.append(str(d))
 
-    # Questions für fehlende Finanzierungsdaten
+    # Questions für fehlende Finanzierungsdaten + Antragstellerdaten
     questions_partner = []
-    for key in missing_financing:
+    for key in missing_financing + missing_applicant_data:
         tpl = QUESTION_TEMPLATES.get(key)
         if tpl:
             questions_partner.append({
@@ -593,9 +613,10 @@ async def check_readiness_endpoint(request: ReadinessRequest):
     # Next action
     next_action = None
     status = result.get("status", "")
-    if missing_financing:
-        tpl = QUESTION_TEMPLATES.get(missing_financing[0], {})
-        next_action = tpl.get("question", f"Bitte {missing_financing[0]} angeben")
+    all_missing_data = missing_financing + missing_applicant_data
+    if all_missing_data:
+        tpl = QUESTION_TEMPLATES.get(all_missing_data[0], {})
+        next_action = tpl.get("question", f"Bitte {all_missing_data[0]} angeben")
     elif missing_docs_str:
         next_action = f"Bitte hochladen: {missing_docs_str[0]}"
     elif result.get("stale_docs"):
@@ -611,9 +632,11 @@ async def check_readiness_endpoint(request: ReadinessRequest):
         new_status=status,
         completeness_percent=result.get("completeness_percent", 0),
         missing_required=missing_financing,
+        missing_applicant_data=missing_applicant_data,
         missing_docs=missing_docs_str,
         stale_docs=result.get("stale_docs", []),
         warnings=result.get("warnings", []),
+        recommended_missing=result.get("recommended_missing", []),
         questions_partner=questions_partner,
         questions_broker=[],
         next_action=next_action,
@@ -2563,6 +2586,13 @@ def _map_extracted_to_facts(doc_type: str, extracted: dict,
             "geburtsdatum": extracted.get("Geburtsdatum"),
             "familienstand": extracted.get("Familienstand"),
         }
+        if not suffix:  # Adresse nur für Hauptantragsteller
+            facts["address_data"] = {
+                "street": extracted.get("Strasse") or extracted.get("Straße"),
+                "house_number": extracted.get("Hausnummer"),
+                "zip": extracted.get("PLZ"),
+                "city": extracted.get("Ort") or extracted.get("Stadt"),
+            }
 
     # Leere Werte entfernen
     def clean(d):

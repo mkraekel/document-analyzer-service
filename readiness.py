@@ -16,19 +16,83 @@ import case_logic as cases
 logger = logging.getLogger(__name__)
 
 # ============================================================
-# PFLICHTFELDER (Finanzierungsdaten)
+# PFLICHTFELDER (Blockierend) – Finanzierungsdaten
 # ============================================================
 REQUIRED_FINANCING_KEYS = ["purchase_price", "loan_amount", "equity_to_use", "object_type", "usage"]
 
+# ============================================================
+# PFLICHTFELDER (Blockierend) – Antragsteller 1 Stammdaten
+# ============================================================
+REQUIRED_APPLICANT_KEYS = [
+    "applicant_first_name", "applicant_last_name", "applicant_birth_date",
+    "employment_type", "net_income",
+]
+
+# ============================================================
+# PFLICHTFELDER (Blockierend) – Wohnadresse
+# ============================================================
+REQUIRED_ADDRESS_KEYS = [
+    "address_street", "address_house_number", "address_zip", "address_city",
+]
+
+# ============================================================
+# PFLICHTFELDER (Blockierend) – Zusatz Selbstständige
+# ============================================================
+REQUIRED_SELF_EMPLOYED_KEYS = ["self_employed_since", "profit_last_year"]
+
+# ============================================================
+# EMPFOHLENE FELDER (Nicht blockierend, Warnung)
+# ============================================================
+RECOMMENDED_KEYS = [
+    "salutation", "birth_place", "nationality", "tax_id", "phone",
+    "occupation", "employer", "employed_since", "marital_status",
+    "children", "property_street", "property_city", "property_zip",
+    "living_space", "year_built", "zinsbindung", "partnerId",
+]
+
 KEY_SEARCH_PATHS = {
+    # Finanzierungsdaten
     "purchase_price": ["purchase_price", "property_data.purchase_price", "financing_data.purchase_price"],
     "loan_amount": ["loan_amount", "financing_data.loan_amount"],
     "equity_to_use": ["equity_to_use", "financing_data.equity_to_use"],
     "object_type": ["object_type", "property_data.object_type"],
     "usage": ["usage", "property_data.usage"],
+    # Antragsteller Stammdaten
+    "applicant_first_name": ["applicant_data.first_name", "applicant_data.vorname", "first_name", "vorname"],
+    "applicant_last_name": ["applicant_data.last_name", "applicant_data.nachname", "last_name", "nachname", "applicant_name"],
+    "applicant_birth_date": ["applicant_data.birth_date", "applicant_data.geburtsdatum", "birth_date", "geburtsdatum"],
+    "employment_type": ["applicant_data.employment_type", "employment_data.employment_type", "employment_type", "employment_status"],
+    "net_income": ["applicant_data.net_income", "applicant_data.nettoeinkommen", "net_income", "nettoeinkommen", "monthly_income"],
+    # Wohnadresse
+    "address_street": ["address_data.street", "address_data.strasse", "street", "strasse"],
+    "address_house_number": ["address_data.house_number", "address_data.hausnummer", "house_number", "hausnummer"],
+    "address_zip": ["address_data.zip", "address_data.plz", "zip", "plz", "postal_code"],
+    "address_city": ["address_data.city", "address_data.ort", "city", "ort"],
+    # Selbstständige Zusatz
+    "self_employed_since": ["applicant_data.self_employed_since", "self_employed_since", "selbststaendig_seit"],
+    "profit_last_year": ["applicant_data.profit_last_year", "profit_last_year", "gewinn_vorjahr"],
+    # Empfohlene Felder
+    "salutation": ["applicant_data.salutation", "salutation", "anrede"],
+    "birth_place": ["applicant_data.birth_place", "birth_place", "geburtsort"],
+    "nationality": ["applicant_data.nationality", "nationality", "staatsangehoerigkeit"],
+    "tax_id": ["applicant_data.tax_id", "tax_id", "steuer_id"],
+    "phone": ["applicant_data.phone", "phone", "telefon"],
+    "occupation": ["applicant_data.occupation", "occupation", "beruf"],
+    "employer": ["applicant_data.employer", "employer", "arbeitgeber"],
+    "employed_since": ["applicant_data.employed_since", "employed_since", "beschaeftigt_seit"],
+    "marital_status": ["household_data.marital_status", "marital_status", "familienstand"],
+    "children": ["household_data.children", "children", "kinder"],
+    "property_street": ["property_data.street", "property_data.strasse"],
+    "property_city": ["property_data.city", "property_data.ort"],
+    "property_zip": ["property_data.zip", "property_data.plz"],
+    "living_space": ["property_data.living_space", "living_space", "wohnflaeche"],
+    "year_built": ["property_data.year_built", "year_built", "baujahr"],
+    "zinsbindung": ["zinsbindung", "financing_data.zinsbindung"],
+    "partnerId": ["partnerId", "partner_id"],
 }
 
-BROKER_REQUIRED = ["partnerId"]
+# partnerId ist laut Doku NICHT blockierend (empfohlen) → leere Liste
+BROKER_REQUIRED = []
 
 # ============================================================
 # DOKUMENT-ANFORDERUNGEN
@@ -37,7 +101,7 @@ BROKER_REQUIRED = ["partnerId"]
 DOCS_REQUIRED_ALWAYS = {
     "Selbstauskunft":       {"count": 1, "max_age_days": None, "per_person": False},
     "Ausweiskopie":         {"count": 1, "max_age_days": None, "per_person": True, "warn_expiry_days": 90},
-    "Eigenkapitalnachweis": {"count": 1, "max_age_days": 30,   "per_person": False},
+    "Eigenkapitalnachweis": {"count": 1, "max_age_days": 30,   "per_person": True},
     "Renteninfo":           {"count": 1, "max_age_days": None, "per_person": True},
 }
 
@@ -50,8 +114,8 @@ DOCS_REQUIRED_EMPLOYED = {
 }
 
 DOCS_REQUIRED_SELF_EMPLOYED = {
-    "BWA":                          {"count": 3, "max_age_days": None, "per_person": True},
-    "Summen und Saldenliste":       {"count": 3, "max_age_days": None, "per_person": True},
+    "BWA":                          {"count": 1, "max_age_days": None, "per_person": True},
+    "Summen und Saldenliste":       {"count": 1, "max_age_days": None, "per_person": True},
     "Jahresabschluss":              {"count": 3, "max_age_days": None, "per_person": True},
     "Steuerbescheid":               {"count": 2, "max_age_days": None, "per_person": True},
     "Steuererklärung":              {"count": 2, "max_age_days": None, "per_person": True},
@@ -60,15 +124,16 @@ DOCS_REQUIRED_SELF_EMPLOYED = {
 }
 
 DOCS_REQUIRED_PROPERTY = {
-    "Exposé":                  {"count": 1, "max_age_days": None},
-    "Objektbild Innen":        {"count": 1, "max_age_days": None},
-    "Objektbild Außen":        {"count": 1, "max_age_days": None},
-    "Baubeschreibung":         {"count": 1, "max_age_days": None},
-    "Grundbuch":               {"count": 1, "max_age_days": 90},
-    "Teilungserklärung":       {"count": 1, "max_age_days": None},
-    "Wohnflächenberechnung":   {"count": 1, "max_age_days": None},
-    "Grundriss":               {"count": 1, "max_age_days": None},
-    "Energieausweis":          {"count": 1, "max_age_days": None},
+    "Exposé":                     {"count": 1, "max_age_days": None},
+    "Objektbild Innen":           {"count": 1, "max_age_days": None},
+    "Objektbild Außen":           {"count": 1, "max_age_days": None},
+    "Baubeschreibung":            {"count": 1, "max_age_days": None},
+    "Grundbuch":                  {"count": 1, "max_age_days": 90},
+    "Teilungserklärung":          {"count": 1, "max_age_days": None, "only_object_type": ["ETW"]},
+    "Wohnflächenberechnung":      {"count": 1, "max_age_days": None},
+    "Grundriss":                  {"count": 1, "max_age_days": None},
+    "Energieausweis":             {"count": 1, "max_age_days": None},
+    "Modernisierungsaufstellung": {"count": 1, "max_age_days": None},
 }
 
 # ============================================================
@@ -132,6 +197,14 @@ DOC_TYPE_ALIASES: dict[str, list[str]] = {
     ],
     "Teilungserklärung": [
         "Aufteilungsplan", "Gemeinschaftsordnung",
+    ],
+    "Gehaltsabrechnung Dezember": [
+        "Dezemberabrechnung", "Gehaltsnachweis Dezember",
+        "Lohnabrechnung Dezember", "Dezember-Gehaltsabrechnung",
+    ],
+    "Modernisierungsaufstellung": [
+        "Modernisierungsliste", "Sanierungsaufstellung",
+        "Renovierungsaufstellung", "Modernisierungsnachweis",
     ],
 }
 
@@ -223,6 +296,16 @@ def _count_docs_with_aliases(docs_index: dict, doc_type: str) -> list:
     return docs
 
 
+def _find_value(view: dict, key: str):
+    """Sucht einen Wert über alle konfigurierten Suchpfade."""
+    paths = KEY_SEARCH_PATHS.get(key, [key])
+    for path in paths:
+        value = _get_nested(view, path)
+        if value is not None and value != "":
+            return value
+    return None
+
+
 def check_readiness(case_id: str) -> dict:
     """
     Vollständige Readiness-Prüfung für einen Case.
@@ -232,10 +315,12 @@ def check_readiness(case_id: str) -> dict:
     {
         status: str,
         missing_financing: list,
+        missing_applicant_data: list,
         missing_broker: list,
         missing_docs: list,
         stale_docs: list,
         warnings: list,
+        recommended_missing: list,
         manual_overrides_applied: list,
         effective_view: dict,
     }
@@ -250,59 +335,87 @@ def check_readiness(case_id: str) -> dict:
 
     # Ergebnisse
     missing_financing = []
+    missing_applicant_data = []
     missing_broker = []
     missing_docs = []
     stale_docs = []
     warnings = []
+    recommended_missing = []
     overrides_applied = []
-    total_doc_checks = 0  # Zählt alle erforderlichen Doc-Typen für completeness
+    total_doc_checks = 0
 
     # ──────────────────────────────────────────
     # 1. Pflichtfelder Finanzierung
     # ──────────────────────────────────────────
     for key in REQUIRED_FINANCING_KEYS:
-        paths = KEY_SEARCH_PATHS.get(key, [key])
-        value = None
-        for path in paths:
-            value = _get_nested(view, path)
-            if value is not None and value != "":
-                break
-        if value is None or value == "":
+        if _find_value(view, key) is None:
             missing_financing.append(key)
 
     # ──────────────────────────────────────────
-    # 2. Pflichtfelder Broker
+    # 2. Pflichtfelder Antragsteller + Adresse
+    # ──────────────────────────────────────────
+    for key in REQUIRED_APPLICANT_KEYS + REQUIRED_ADDRESS_KEYS:
+        if _find_value(view, key) is None:
+            missing_applicant_data.append(key)
+
+    # ──────────────────────────────────────────
+    # 3. Employment-Typ bestimmen (für Selbstständige-Checks + Doku)
+    # ──────────────────────────────────────────
+    employment = str(
+        _find_value(view, "employment_type")
+        or view.get("employment_status")
+        or "Angestellter"
+    )
+    is_self_employed = "selbst" in employment.lower() or "freiberuf" in employment.lower()
+
+    # Selbstständige: Zusätzliche Pflichtfelder
+    if is_self_employed:
+        for key in REQUIRED_SELF_EMPLOYED_KEYS:
+            if _find_value(view, key) is None:
+                missing_applicant_data.append(key)
+
+    # ──────────────────────────────────────────
+    # 4. Pflichtfelder Broker (laut Doku leer – partnerId ist empfohlen)
     # ──────────────────────────────────────────
     for key in BROKER_REQUIRED:
         if not view.get(key):
             missing_broker.append(key)
 
     # ──────────────────────────────────────────
-    # 3. Dokument-Checks
+    # 5. Empfohlene Felder (nicht blockierend → Warnungen)
+    # ──────────────────────────────────────────
+    for key in RECOMMENDED_KEYS:
+        if _find_value(view, key) is None:
+            recommended_missing.append(key)
+
+    # ──────────────────────────────────────────
+    # 6. Dokument-Checks
     # ──────────────────────────────────────────
     is_couple = bool(
         view.get("is_couple")
         or _get_nested(view, "applicant_data_2.vorname")
         or _get_nested(view, "applicant_data_2.nachname")
     )
-    employment = str(
-        view.get("employment_type")
-        or _get_nested(view, "employment_data.employment_type")
-        or view.get("employment_status")
-        or "Angestellter"
-    )
-    is_self_employed = "selbst" in employment.lower() or "freiberuf" in employment.lower()
     has_joint_account = bool(overrides.get("has_joint_account") or view.get("has_joint_account"))
+
+    # Objekttyp für bedingte Dokumente (Teilungserklärung nur bei ETW)
+    object_type = str(
+        view.get("object_type")
+        or _get_nested(view, "property_data.object_type")
+        or ""
+    ).upper().strip()
 
     person_count = 2 if is_couple else 1
 
     def check_doc(doc_type: str, req: dict):
-        """
-        Prüft ob genug Dokumente vorhanden sind.
-        Berechnet required_count korrekt per person_count * per_person.
-        KEIN Loop - wird genau 1x pro Dokumenttyp aufgerufen.
-        """
         nonlocal total_doc_checks
+
+        # Bedingt: nur bei bestimmtem Objekttyp erforderlich
+        only_obj_types = req.get("only_object_type")
+        if only_obj_types:
+            if object_type not in [t.upper() for t in only_obj_types]:
+                return  # Nicht erforderlich für diesen Objekttyp
+
         total_doc_checks += 1
 
         # Alle Dokumente inkl. Aliase sammeln
@@ -380,13 +493,13 @@ def check_readiness(case_id: str) -> dict:
         check_doc(doc_type, req)
 
     # ──────────────────────────────────────────
-    # 4. Manual Overrides prüfen
+    # 7. Manual Overrides prüfen
     # ──────────────────────────────────────────
     approve_import = bool(overrides.get("APPROVE_IMPORT"))
     wait_for_docs = bool(overrides.get("WAIT_FOR_DOCS"))
 
     # ──────────────────────────────────────────
-    # 5. Status bestimmen
+    # 8. Status bestimmen
     # Priorität: APPROVE_IMPORT > WAIT_FOR_DOCS > sonstige Blocker
     # ──────────────────────────────────────────
     if approve_import:
@@ -398,7 +511,7 @@ def check_readiness(case_id: str) -> dict:
     elif stale_docs and not any(overrides.get(f"accept_stale_{d['type'].lower().replace(' ', '_')}") for d in stale_docs):
         status = "NEEDS_MANUAL_REVIEW_BROKER"
 
-    elif missing_financing:
+    elif missing_financing or missing_applicant_data:
         status = "NEEDS_QUESTIONS_PARTNER"
 
     elif missing_docs:
@@ -411,23 +524,37 @@ def check_readiness(case_id: str) -> dict:
         status = "AWAITING_BROKER_CONFIRMATION"
 
     # Tatsächlich vollständig = keine offenen Punkte
-    actually_complete = not missing_financing and not missing_docs and not stale_docs and not missing_broker
+    actually_complete = (
+        not missing_financing
+        and not missing_applicant_data
+        and not missing_docs
+        and not stale_docs
+        and not missing_broker
+    )
     is_complete = status in ("READY_FOR_IMPORT", "AWAITING_BROKER_CONFIRMATION")
 
     # Completeness Prozent (fuer Dashboard)
-    # total = Finanzierungsfelder + alle geprüften Dokumenttypen
-    total_checks = len(REQUIRED_FINANCING_KEYS) + total_doc_checks
-    failed_checks = len(missing_financing) + len(missing_docs) + len(stale_docs)
+    total_checks = (
+        len(REQUIRED_FINANCING_KEYS)
+        + len(REQUIRED_APPLICANT_KEYS)
+        + len(REQUIRED_ADDRESS_KEYS)
+        + total_doc_checks
+    )
+    if is_self_employed:
+        total_checks += len(REQUIRED_SELF_EMPLOYED_KEYS)
+    failed_checks = len(missing_financing) + len(missing_applicant_data) + len(missing_docs) + len(stale_docs)
     passed_checks = total_checks - failed_checks
     completeness_percent = max(0, min(100, round((passed_checks / max(total_checks, 1)) * 100)))
 
     result = {
         "status": status,
         "missing_financing": missing_financing,
+        "missing_applicant_data": missing_applicant_data,
         "missing_broker": missing_broker,
         "missing_docs": missing_docs,
         "stale_docs": stale_docs,
         "warnings": warnings,
+        "recommended_missing": recommended_missing,
         "manual_overrides_applied": overrides_applied,
         "effective_view": view,
         "approve_import": approve_import,
@@ -441,6 +568,10 @@ def check_readiness(case_id: str) -> dict:
 
     # In DB speichern (cached case durchreichen → spart 1 DB call)
     cases.update_status(case_id, status, result, _cached_case=case)
-    logger.info(f"Readiness check for {case_id}: {status} | missing_fin={missing_financing} | missing_docs={len(missing_docs)} | is_couple={is_couple}")
+    logger.info(
+        f"Readiness check for {case_id}: {status} | "
+        f"missing_fin={missing_financing} | missing_applicant={missing_applicant_data} | "
+        f"missing_docs={len(missing_docs)} | is_couple={is_couple}"
+    )
 
     return result

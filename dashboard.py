@@ -143,6 +143,7 @@ async def dashboard_cases():
                 "onedrive_folder_id": c.get("onedrive_folder_id", ""),
                 "last_status_change": c.get("last_status_change"),
                 "missing_financing": readiness.get("missing_financing", []),
+                "missing_applicant_data": readiness.get("missing_applicant_data", []),
                 "missing_docs_count": len(readiness.get("missing_docs", [])),
                 "total_docs_required": len(readiness.get("missing_docs", [])),
                 "overrides_applied": readiness.get("manual_overrides_applied", []),
