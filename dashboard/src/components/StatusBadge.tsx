@@ -8,6 +8,7 @@ const STATUS_LABELS: Record<string, string> = {
   READY_FOR_IMPORT: 'Bereit für Import',
   IMPORTED: 'Importiert',
   ERROR: 'Fehler',
+  DECLINED: 'Abgelehnt',
   ARCHIVED: 'Archiviert',
 }
 
@@ -21,6 +22,7 @@ const STATUS_COLORS: Record<string, string> = {
   READY_FOR_IMPORT: 'bg-green-100 text-green-800',
   IMPORTED: 'bg-emerald-100 text-emerald-800',
   ERROR: 'bg-red-200 text-red-900',
+  DECLINED: 'bg-red-100 text-red-700',
   ARCHIVED: 'bg-gray-200 text-gray-600',
 }
 

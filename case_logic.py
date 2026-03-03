@@ -122,7 +122,7 @@ def load_case(case_id: str) -> Optional[dict]:
 def get_all_active_cases() -> list[dict]:
     """Alle aktiven Cases laden"""
     all_cases = db.list_rows("fin_cases")
-    inactive = {"IMPORTED", "ERROR", "ARCHIVED"}
+    inactive = {"IMPORTED", "ERROR", "ARCHIVED", "DECLINED"}
     return [c for c in all_cases if c.get("status") not in inactive]
 
 

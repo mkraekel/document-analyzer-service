@@ -376,6 +376,12 @@ async def dashboard_action(case_id: str, req: ActionRequest):
             import asyncio
             asyncio.create_task(_do_reanalyze(case_id))
             return {"success": True, "case_id": case_id, "message": "Neuanalyse gestartet (läuft im Hintergrund)"}
+        elif action == "DECLINE":
+            cases.update_status(case_id, "DECLINED")
+            return {"success": True, "case_id": case_id, "status": "DECLINED"}
+        elif action == "ARCHIVE":
+            cases.update_status(case_id, "ARCHIVED")
+            return {"success": True, "case_id": case_id, "status": "ARCHIVED"}
         else:
             raise HTTPException(status_code=400, detail=f"Unbekannte Aktion: {action}")
 

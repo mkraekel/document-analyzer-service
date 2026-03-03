@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, ExternalLink, RefreshCw, Check, FileText,
-  Mail, Clock, Shield, ChevronDown, ChevronUp, Pencil, X as XIcon, Save, Eye, Loader
+  Mail, Clock, Shield, ChevronDown, ChevronUp, Pencil, X as XIcon, Save, Eye, Loader, Archive, XCircle
 } from 'lucide-react'
 import { useApiGet } from '../hooks/useApi'
 import { useToast } from '../hooks/useToast'
@@ -343,6 +343,22 @@ export function CaseDetail() {
             >
               <Check size={14} />
               Freigabe
+            </button>
+            <button
+              onClick={() => { if (confirm('Case wirklich ablehnen?')) doAction('DECLINE') }}
+              disabled={busy}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-red-300 text-red-700 rounded-lg hover:bg-red-50 disabled:opacity-50 transition-colors"
+            >
+              <XCircle size={14} />
+              Ablehnen
+            </button>
+            <button
+              onClick={() => { if (confirm('Case archivieren?')) doAction('ARCHIVE') }}
+              disabled={busy}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors"
+            >
+              <Archive size={14} />
+              Archivieren
             </button>
             {c.status === 'READY_FOR_IMPORT' && (
               <>

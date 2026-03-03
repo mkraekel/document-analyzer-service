@@ -15,20 +15,28 @@ export function Cases() {
   const { data, loading } = useApiGet<{ cases: CaseListItem[] }>('/api/dashboard/cases')
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
+  const [showArchived, setShowArchived] = useState(false)
 
+  const HIDDEN_STATUSES = new Set(['ARCHIVED', 'DECLINED', 'IMPORTED'])
   const cases = data?.cases || []
 
   const filtered = useMemo(() => {
-    if (!search.trim()) return cases
-    const q = search.toLowerCase()
-    return cases.filter(
-      c =>
-        (c.applicant_name || '').toLowerCase().includes(q) ||
-        (c.partner_email || '').toLowerCase().includes(q) ||
-        (c.case_id || '').toLowerCase().includes(q) ||
-        (c.status || '').toLowerCase().includes(q),
-    )
-  }, [cases, search])
+    let result = cases
+    if (!showArchived) {
+      result = result.filter(c => !HIDDEN_STATUSES.has(c.status))
+    }
+    if (search.trim()) {
+      const q = search.toLowerCase()
+      result = result.filter(
+        c =>
+          (c.applicant_name || '').toLowerCase().includes(q) ||
+          (c.partner_email || '').toLowerCase().includes(q) ||
+          (c.case_id || '').toLowerCase().includes(q) ||
+          (c.status || '').toLowerCase().includes(q),
+      )
+    }
+    return result
+  }, [cases, search, showArchived])
 
   const totalPages = Math.ceil(filtered.length / PER_PAGE)
   const pageItems = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE)
@@ -42,15 +50,27 @@ export function Cases() {
           <h1 className="text-2xl font-bold text-gray-900">Cases</h1>
           <p className="text-sm text-gray-500 mt-1">{filtered.length} Finanzierungsanfragen</p>
         </div>
-        <div className="relative">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input
-            type="text"
-            value={search}
-            onChange={e => { setSearch(e.target.value); setPage(1) }}
-            placeholder="Suchen..."
-            className="pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm w-full sm:w-64 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-          />
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => { setShowArchived(!showArchived); setPage(1) }}
+            className={`px-3 py-2 text-sm rounded-lg border transition-colors ${
+              showArchived
+                ? 'bg-gray-200 text-gray-700 border-gray-300'
+                : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'
+            }`}
+          >
+            {showArchived ? 'Alle' : 'Archiv zeigen'}
+          </button>
+          <div className="relative">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              value={search}
+              onChange={e => { setSearch(e.target.value); setPage(1) }}
+              placeholder="Suchen..."
+              className="pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm w-full sm:w-64 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+            />
+          </div>
         </div>
       </div>
 
