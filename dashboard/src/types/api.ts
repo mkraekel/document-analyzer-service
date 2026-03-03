@@ -50,6 +50,8 @@ export interface CaseEmail {
   processing_result: string
   processed_at: string
   matched_by: string
+  body_text: string
+  parsed_result: Record<string, unknown>
 }
 
 export interface AuditEntry {

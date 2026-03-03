@@ -678,23 +678,44 @@ export function CaseDetail() {
           <p className="text-sm text-gray-500">Keine E-Mails</p>
         ) : (
           <div className="space-y-2">
-            {c.emails.map((email, i) => (
-              <div key={i} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2">
-                <div>
-                  <span className="text-sm text-gray-900">{email.subject || '(Kein Betreff)'}</span>
-                  <div className="text-xs text-gray-500">
-                    {email.from_email} · {formatTime(email.processed_at)}
+            {c.emails.map((email, i) => {
+              const parsed = email.parsed_result || {}
+              return (
+                <details key={i} className="bg-gray-50 rounded-lg overflow-hidden">
+                  <summary className="flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-gray-100 transition-colors">
+                    <div className="flex-1 min-w-0">
+                      <span className="text-sm text-gray-900">{email.subject || '(Kein Betreff)'}</span>
+                      <div className="text-xs text-gray-500">
+                        {email.from_email} · {formatTime(email.processed_at)}
+                        {email.mail_type && <span> · {email.mail_type}</span>}
+                      </div>
+                    </div>
+                    <span className={`text-xs px-2 py-0.5 rounded-full shrink-0 ml-2 ${
+                      email.processing_result === 'assigned' ? 'bg-green-50 text-green-700' :
+                      email.processing_result === 'auto_matched' ? 'bg-blue-50 text-blue-700' :
+                      'bg-gray-100 text-gray-600'
+                    }`}>
+                      {email.processing_result}
+                    </span>
+                  </summary>
+                  <div className="px-3 pb-3 border-t border-gray-200">
+                    <div className="mt-2 text-sm text-gray-700 bg-white rounded-lg p-3 max-h-96 overflow-y-auto whitespace-pre-wrap">
+                      {email.body_text || '(Kein Text)'}
+                    </div>
+                    {Object.keys(parsed).length > 0 && (
+                      <details className="mt-2">
+                        <summary className="text-xs font-medium text-gray-500 cursor-pointer hover:text-gray-700">
+                          Parsing-Ergebnis
+                        </summary>
+                        <pre className="mt-1 text-xs bg-white rounded-lg p-3 overflow-x-auto max-h-48">
+                          {JSON.stringify(parsed, null, 2)}
+                        </pre>
+                      </details>
+                    )}
                   </div>
-                </div>
-                <span className={`text-xs px-2 py-0.5 rounded-full ${
-                  email.processing_result === 'assigned' ? 'bg-green-50 text-green-700' :
-                  email.processing_result === 'auto_matched' ? 'bg-blue-50 text-blue-700' :
-                  'bg-gray-100 text-gray-600'
-                }`}>
-                  {email.processing_result}
-                </span>
-              </div>
-            ))}
+                </details>
+              )
+            })}
           </div>
         )}
       </Section>

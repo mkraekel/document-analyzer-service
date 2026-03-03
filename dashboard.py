@@ -209,6 +209,12 @@ async def dashboard_case_detail(case_id: str):
 
         email_list = []
         for e in emails:
+            parsed = e.get("parsed_result") or {}
+            if isinstance(parsed, str):
+                try:
+                    parsed = json.loads(parsed)
+                except Exception:
+                    parsed = {}
             email_list.append({
                 "subject": e.get("subject"),
                 "from_email": e.get("from_email"),
@@ -216,6 +222,8 @@ async def dashboard_case_detail(case_id: str):
                 "processing_result": e.get("processing_result"),
                 "processed_at": e.get("processed_at"),
                 "matched_by": e.get("matched_by", ""),
+                "body_text": e.get("body_text", ""),
+                "parsed_result": parsed,
             })
 
         # Europace-Felder
