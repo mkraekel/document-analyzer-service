@@ -389,12 +389,28 @@ def process_google_drive_links(
             })
             errors.append(f"{fname}: {err_msg}")
 
-    # 5. Batch save documents
+    # 5. Upsert documents (update existing, insert new)
     if doc_rows:
         try:
-            db.batch_create_rows("fin_documents", doc_rows)
+            existing_docs = db.search_rows("fin_documents", "caseId", case_id)
+            existing_by_name = {d.get("file_name"): d for d in existing_docs}
+            rows_to_insert = []
+            for row in doc_rows:
+                fname = row.get("file_name")
+                if fname in existing_by_name:
+                    db.update_row("fin_documents", existing_by_name[fname]["_id"], {
+                        "doc_type": row["doc_type"],
+                        "extracted_data": row["extracted_data"],
+                        "processing_status": row["processing_status"],
+                        "processed_at": row["processed_at"],
+                    })
+                else:
+                    rows_to_insert.append(row)
+            if rows_to_insert:
+                db.batch_create_rows("fin_documents", rows_to_insert)
+            logger.info(f"[{case_id}] Docs upsert: {len(doc_rows) - len(rows_to_insert)} updated, {len(rows_to_insert)} inserted")
         except Exception as e:
-            logger.error(f"[{case_id}] Batch insert fin_documents failed: {e}")
+            logger.error(f"[{case_id}] Docs upsert failed: {e}")
             errors.append(f"DB save error: {e}")
 
     # 6. Merge all facts at once

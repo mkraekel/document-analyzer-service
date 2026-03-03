@@ -2429,17 +2429,31 @@ async def process_document(request: ProcessDocumentRequest):
         })
         return ProcessDocumentResponse(success=False, case_id=request.case_id, error=str(e))
 
-    # 3. In fin_documents speichern
+    # 3. In fin_documents speichern (Upsert: update wenn schon vorhanden)
     extracted = result.get("extracted_data") or {}
-    db.create_row("fin_documents", {
-        "caseId": request.case_id,
-        "onedrive_file_id": request.onedrive_file_id or "",
-        "file_name": request.filename,
+    doc_data = {
         "doc_type": result.get("doc_type", "Sonstiges"),
         "extracted_data": json.dumps(extracted),
         "processing_status": "completed",
         "processed_at": __import__("datetime").datetime.utcnow().isoformat(),
-    })
+    }
+    # Prüfe ob Dokument schon existiert (by onedrive_file_id oder file_name)
+    existing_doc = None
+    existing_docs = db.search_rows("fin_documents", "caseId", request.case_id)
+    for d in existing_docs:
+        if request.onedrive_file_id and d.get("onedrive_file_id") == request.onedrive_file_id:
+            existing_doc = d
+            break
+        if d.get("file_name") == request.filename:
+            existing_doc = d
+            break
+    if existing_doc:
+        db.update_row("fin_documents", existing_doc["_id"], doc_data)
+    else:
+        doc_data["caseId"] = request.case_id
+        doc_data["onedrive_file_id"] = request.onedrive_file_id or ""
+        doc_data["file_name"] = request.filename
+        db.create_row("fin_documents", doc_data)
 
     # 4. Facts in Case mergen
     try:
