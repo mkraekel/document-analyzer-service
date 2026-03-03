@@ -171,14 +171,90 @@ Für Kontoauszüge:
 - Regelmäßige Eingänge/Ausgänge
 
 Für Selbstauskunft:
-- Vorname, Nachname, Geburtsdatum, Familienstand
-- Telefon, E-Mail
+- Anrede (Herr/Frau), Vorname, Nachname, Geburtsdatum, Familienstand
+- Telefon, E-Mail, Steuer-ID
 - Strasse, Hausnummer, PLZ, Ort (Wohnadresse)
-- Beruf, Einkommen
+- Beruf, Beschäftigt seit (Datum), Einkommen
+- Anzahl Kinder
 
-Für Immobilien-Dokumente (Exposé, Grundbuch, etc.):
-- Adresse, Wohnfläche, Baujahr, Objekttyp
-- Kaufpreis, Grundstücksgröße
+Für Immobilien-Dokumente (Exposé, Grundbuch, Kaufvertrag, Energieausweis, etc.):
+- Straße, Hausnummer, PLZ, Ort (Objektadresse - EINZELN aufteilen, nicht als ein String!)
+- Wohnfläche, Baujahr, Grundstücksgröße
+- Kaufpreis
+- Objekttyp (MUSS einer sein: ETW, EFH, DHH, RH, MFH, Grundstück)
+- Nutzungsart (MUSS einer sein: Eigennutzung, Kapitalanlage, Teilvermietet)
+
+Für Steuerbescheide:
+- Steuerjahr, zu versteuerndes Einkommen
+- Einkünfte aus nichtselbständiger Arbeit
+- Einkünfte aus Gewerbebetrieb/selbständiger Arbeit
+- Einkünfte aus Vermietung und Verpachtung
+- Erstattung/Nachzahlung
+
+Für Steuererklärungen:
+- Steuerjahr
+- Einkünfte aus nichtselbständiger Arbeit
+- Einkünfte aus Vermietung und Verpachtung
+- Werbungskosten
+
+Für BWA (Betriebswirtschaftliche Auswertung):
+- Zeitraum (Monat/Jahr), Firma/Unternehmen
+- Umsatzerlöse, Gesamtkosten
+- Vorläufiges Ergebnis (Gewinn/Verlust)
+
+Für Jahresabschluss:
+- Jahr, Firma/Unternehmen
+- Bilanzsumme, Umsatzerlöse
+- Jahresüberschuss/Gewinn
+
+Für Summen und Saldenliste:
+- Zeitraum, Firma/Unternehmen
+- Kontensalden (Zusammenfassung)
+
+Für Renteninfo:
+- Prognostizierte monatliche Rente (bei Regelaltersgrenze)
+- Bisher erworbene Rentenansprüche
+- Rentenversicherungsnummer
+
+Für Eigenkapitalnachweise (Finanzstatus, Vermögensaufstellung):
+- Gesamtguthaben/Gesamtvermögen
+- Einzelne Konten mit jeweiligem Saldo
+- Bank/Institut
+
+Für Depotnachweis:
+- Gesamtdepotwert
+- Bank/Broker
+- Einzelne Positionen (optional)
+
+Für Kaufvertrag:
+- Kaufpreis, Straße, Hausnummer, PLZ, Ort (Objektadresse - EINZELN!)
+- Käufer, Verkäufer, Notar
+- Datum
+
+Für Darlehensvertrag (bestehende Kredite):
+- Bank/Kreditgeber, Restschuld, Zinssatz
+- Monatliche Rate, Laufzeitende
+
+Für Bausparvertrag:
+- Bausparkasse, Bausparsumme, Angespartes Guthaben
+- Tarif, Zuteilungsreif (ja/nein)
+
+Für Mietvertrag:
+- Kaltmiete, Warmmiete/Nebenkosten
+- Mieter, Vermieter
+- Objektadresse
+
+Für Nachweis Krankenversicherung:
+- PKV oder GKV
+- Monatlicher Beitrag, Versicherer
+
+Für Handelsregisterauszug:
+- Firma, Sitz, Geschäftsführer
+- HRB/HRA-Nummer, Rechtsform
+
+Für Energieausweis:
+- Energiekennwert (kWh/m²a), Energieeffizienzklasse
+- Heizungsart, Baujahr (des Gebäudes)
 
 Antworte NUR mit validem JSON in diesem Format:
 {{
@@ -2581,10 +2657,17 @@ def _map_extracted_to_facts(doc_type: str, extracted: dict,
         facts["property_data"] = {
             "purchase_price": extracted.get("Kaufpreis") or extracted.get("purchase_price"),
             "address": extracted.get("Adresse"),
+            "street": extracted.get("Straße") or extracted.get("Strasse") or extracted.get("street"),
+            "house_number": extracted.get("Hausnummer") or extracted.get("house_number"),
+            "zip": extracted.get("PLZ") or extracted.get("zip"),
+            "plz": extracted.get("PLZ"),
+            "city": extracted.get("Ort") or extracted.get("Stadt") or extracted.get("city"),
+            "ort": extracted.get("Ort") or extracted.get("Stadt"),
             "object_type": extracted.get("Objekttyp") or extracted.get("object_type"),
             "usage": extracted.get("Nutzungsart") or extracted.get("usage"),
-            "living_space": extracted.get("Wohnfläche"),
+            "living_space": extracted.get("Wohnfläche") or extracted.get("Wohnflaeche"),
             "year_built": extracted.get("Baujahr"),
+            "plot_size": extracted.get("Grundstücksgröße") or extracted.get("Grundstuecksgroesse"),
         }
 
     elif doc_type in ("Selbstauskunft",):
@@ -2593,6 +2676,11 @@ def _map_extracted_to_facts(doc_type: str, extracted: dict,
         _telefon = extracted.get("Telefon") or extracted.get("applicant_phone")
         _gebdat = extracted.get("Geburtsdatum")
         _famstand = extracted.get("Familienstand")
+        _beruf = extracted.get("Beruf") or extracted.get("occupation")
+        _anrede = extracted.get("Anrede") or extracted.get("salutation")
+        _steuer_id = extracted.get("Steuer-ID") or extracted.get("Steuer_ID") or extracted.get("tax_id")
+        _besch_seit = extracted.get("Beschäftigt seit") or extracted.get("Beschaeftigt_seit") or extracted.get("employed_since")
+        _kinder = extracted.get("Anzahl Kinder") or extracted.get("Kinder") or extracted.get("children")
         facts[f"applicant_data{suffix}"] = {
             "first_name": _vorname, "vorname": _vorname,
             "last_name": _nachname, "nachname": _nachname,
@@ -2600,6 +2688,11 @@ def _map_extracted_to_facts(doc_type: str, extracted: dict,
             "email": extracted.get("E-Mail") or extracted.get("applicant_email"),
             "birth_date": _gebdat, "geburtsdatum": _gebdat,
             "marital_status": _famstand, "familienstand": _famstand,
+            "occupation": _beruf, "beruf": _beruf,
+            "salutation": _anrede, "anrede": _anrede,
+            "tax_id": _steuer_id, "steuer_id": _steuer_id,
+            "employed_since": _besch_seit, "beschaeftigt_seit": _besch_seit,
+            "children": _kinder, "kinder": _kinder,
         }
         if not suffix:  # Adresse nur für Hauptantragsteller
             facts["address_data"] = {
@@ -2608,6 +2701,204 @@ def _map_extracted_to_facts(doc_type: str, extracted: dict,
                 "zip": extracted.get("PLZ"),
                 "city": extracted.get("Ort") or extracted.get("Stadt"),
             }
+        # Einkommen aus Selbstauskunft
+        _einkommen = extracted.get("Einkommen") or extracted.get("Netto")
+        if _einkommen:
+            facts[f"income_data{suffix}"] = {
+                "net_income": _einkommen,
+                "netto": _einkommen,
+            }
+
+    elif doc_type in ("Kaufvertrag",):
+        facts["property_data"] = {
+            "purchase_price": extracted.get("Kaufpreis") or extracted.get("purchase_price"),
+            "address": extracted.get("Adresse"),
+            "street": extracted.get("Straße") or extracted.get("Strasse") or extracted.get("street"),
+            "house_number": extracted.get("Hausnummer") or extracted.get("house_number"),
+            "zip": extracted.get("PLZ") or extracted.get("zip"),
+            "plz": extracted.get("PLZ"),
+            "city": extracted.get("Ort") or extracted.get("Stadt") or extracted.get("city"),
+            "ort": extracted.get("Ort") or extracted.get("Stadt"),
+        }
+
+    elif doc_type in ("Steuerbescheid",):
+        facts[f"tax_data{suffix}"] = {
+            "tax_year": extracted.get("Steuerjahr"),
+            "taxable_income": extracted.get("zu versteuerndes Einkommen"),
+            "income_employment": extracted.get("Einkünfte aus nichtselbständiger Arbeit") or extracted.get("Einkuenfte_nichtselbstaendig"),
+            "income_self_employment": extracted.get("Einkünfte aus Gewerbebetrieb/selbständiger Arbeit") or extracted.get("Einkuenfte_selbstaendig") or extracted.get("Einkünfte aus Gewerbebetrieb"),
+            "income_rental": extracted.get("Einkünfte aus Vermietung und Verpachtung") or extracted.get("Einkuenfte_vermietung"),
+            "refund_or_payment": extracted.get("Erstattung/Nachzahlung") or extracted.get("Erstattung"),
+        }
+
+    elif doc_type in ("Steuererklärung",):
+        facts[f"tax_data{suffix}"] = {
+            "tax_year": extracted.get("Steuerjahr"),
+            "income_employment": extracted.get("Einkünfte aus nichtselbständiger Arbeit") or extracted.get("Einkuenfte_nichtselbstaendig"),
+            "income_rental": extracted.get("Einkünfte aus Vermietung und Verpachtung") or extracted.get("Einkuenfte_vermietung"),
+            "deductions": extracted.get("Werbungskosten"),
+        }
+
+    elif doc_type in ("BWA",):
+        _gewinn = extracted.get("Vorläufiges Ergebnis") or extracted.get("Gewinn/Verlust") or extracted.get("Gewinn") or extracted.get("profit")
+        facts[f"income_data{suffix}"] = {
+            "profit_last_year": _gewinn,
+            "gewinn_vorjahr": _gewinn,
+            "revenue": extracted.get("Umsatzerlöse") or extracted.get("Umsatz"),
+            "total_costs": extracted.get("Gesamtkosten"),
+        }
+        facts[f"business_data{suffix}"] = {
+            "company_name": extracted.get("Firma") or extracted.get("Unternehmen"),
+            "period": extracted.get("Zeitraum"),
+        }
+        facts[f"employment_data{suffix}"] = {
+            "employment_type": "Selbständiger",
+        }
+        facts[f"applicant_data{suffix}"] = {
+            "employment_type": "Selbständiger",
+            "profit_last_year": _gewinn,
+        }
+
+    elif doc_type in ("Jahresabschluss",):
+        _gewinn = extracted.get("Jahresüberschuss") or extracted.get("Gewinn") or extracted.get("profit")
+        facts[f"income_data{suffix}"] = {
+            "profit_last_year": _gewinn,
+            "gewinn_vorjahr": _gewinn,
+            "revenue": extracted.get("Umsatzerlöse") or extracted.get("Umsatz"),
+            "balance_total": extracted.get("Bilanzsumme"),
+        }
+        facts[f"business_data{suffix}"] = {
+            "company_name": extracted.get("Firma") or extracted.get("Unternehmen"),
+            "year": extracted.get("Jahr"),
+        }
+        facts[f"applicant_data{suffix}"] = {
+            "employment_type": "Selbständiger",
+            "profit_last_year": _gewinn,
+        }
+
+    elif doc_type in ("Summen und Saldenliste",):
+        facts[f"business_data{suffix}"] = {
+            "company_name": extracted.get("Firma") or extracted.get("Unternehmen"),
+            "period": extracted.get("Zeitraum"),
+            "account_balances": extracted.get("Kontensalden"),
+        }
+
+    elif doc_type in ("Renteninfo",):
+        facts[f"pension_data{suffix}"] = {
+            "projected_monthly_pension": extracted.get("Prognostizierte monatliche Rente") or extracted.get("monatliche Rente"),
+            "current_pension_entitlement": extracted.get("Bisher erworbene Rentenansprüche") or extracted.get("erworbene Rentenansprüche"),
+            "insurance_number": extracted.get("Rentenversicherungsnummer"),
+        }
+
+    elif doc_type in ("Eigenkapitalnachweis",):
+        facts["equity_data"] = {
+            "total_equity": extracted.get("Gesamtguthaben") or extracted.get("Gesamtvermögen") or extracted.get("Gesamtvermoegen"),
+            "accounts": extracted.get("Einzelne Konten") or extracted.get("Konten"),
+            "bank": extracted.get("Bank") or extracted.get("Institut"),
+        }
+
+    elif doc_type in ("Depotnachweis",):
+        facts["equity_data"] = {
+            "depot_value": extracted.get("Gesamtdepotwert") or extracted.get("Depotwert"),
+            "bank": extracted.get("Bank") or extracted.get("Broker"),
+        }
+
+    elif doc_type in ("Darlehensvertrag",):
+        facts["existing_loans"] = {
+            "bank": extracted.get("Bank") or extracted.get("Kreditgeber"),
+            "remaining_debt": extracted.get("Restschuld"),
+            "interest_rate": extracted.get("Zinssatz"),
+            "monthly_rate": extracted.get("Monatliche Rate") or extracted.get("Rate"),
+            "end_date": extracted.get("Laufzeitende"),
+        }
+
+    elif doc_type in ("Bausparvertrag",):
+        facts["savings_data"] = {
+            "bausparkasse": extracted.get("Bausparkasse"),
+            "target_amount": extracted.get("Bausparsumme"),
+            "saved_amount": extracted.get("Angespartes Guthaben") or extracted.get("Guthaben"),
+            "tariff": extracted.get("Tarif"),
+            "ready_for_allocation": extracted.get("Zuteilungsreif"),
+        }
+
+    elif doc_type in ("Mietvertrag",):
+        facts["rental_data"] = {
+            "cold_rent": extracted.get("Kaltmiete"),
+            "warm_rent": extracted.get("Warmmiete") or extracted.get("Warmmiete/Nebenkosten"),
+            "tenant": extracted.get("Mieter"),
+            "landlord": extracted.get("Vermieter"),
+            "address": extracted.get("Objektadresse") or extracted.get("Adresse"),
+        }
+
+    elif doc_type in ("Nachweis Krankenversicherung",):
+        facts[f"insurance_data{suffix}"] = {
+            "type": extracted.get("PKV oder GKV") or extracted.get("PKV/GKV") or extracted.get("Versicherungsart"),
+            "monthly_premium": extracted.get("Monatlicher Beitrag") or extracted.get("Beitrag"),
+            "insurer": extracted.get("Versicherer") or extracted.get("Versicherung"),
+        }
+
+    elif doc_type in ("Energieausweis",):
+        facts["property_data"] = {
+            "energy_value": extracted.get("Energiekennwert"),
+            "energy_class": extracted.get("Energieeffizienzklasse"),
+            "heating_type": extracted.get("Heizungsart"),
+            "year_built": extracted.get("Baujahr"),
+        }
+
+    elif doc_type in ("Handelsregisterauszug", "Gesellschaftsvertrag"):
+        facts[f"business_data{suffix}"] = {
+            "company_name": extracted.get("Firma"),
+            "seat": extracted.get("Sitz"),
+            "managing_director": extracted.get("Geschäftsführer") or extracted.get("Geschaeftsfuehrer"),
+            "register_number": extracted.get("HRB/HRA-Nummer") or extracted.get("HRB") or extracted.get("HRA"),
+            "legal_form": extracted.get("Rechtsform"),
+        }
+
+    else:
+        # Generischer Fallback: Bekannte Felder aus JEDEM Dokumenttyp extrahieren
+        _GENERIC_PROPERTY_MAP = {
+            "Kaufpreis": "purchase_price", "purchase_price": "purchase_price",
+            "Adresse": "address", "address": "address",
+            "Objekttyp": "object_type", "object_type": "object_type",
+            "Nutzungsart": "usage", "usage": "usage",
+            "Wohnfläche": "living_space", "living_space": "living_space",
+            "Baujahr": "year_built", "year_built": "year_built",
+            "Grundstücksgröße": "plot_size", "plot_size": "plot_size",
+        }
+        _GENERIC_INCOME_MAP = {
+            "Netto": "net_income", "net_income": "net_income",
+            "Brutto": "brutto", "brutto": "brutto",
+            "Arbeitgeber": "employer", "employer": "employer",
+        }
+        _GENERIC_APPLICANT_MAP = {
+            "Vorname": "first_name", "first_name": "first_name",
+            "Nachname": "last_name", "last_name": "last_name",
+            "Geburtsdatum": "birth_date", "birth_date": "birth_date",
+        }
+
+        prop = {}
+        for src_key, dst_key in _GENERIC_PROPERTY_MAP.items():
+            val = extracted.get(src_key)
+            if val is not None and val != "":
+                prop[dst_key] = val
+        if prop:
+            facts["property_data"] = prop
+
+        inc = {}
+        for src_key, dst_key in _GENERIC_INCOME_MAP.items():
+            val = extracted.get(src_key)
+            if val is not None and val != "":
+                inc[dst_key] = val
+        if inc:
+            facts[f"income_data{suffix}"] = inc
+
+        app = {}
+        for src_key, dst_key in _GENERIC_APPLICANT_MAP.items():
+            val = extracted.get(src_key)
+            if val is not None and val != "":
+                app[dst_key] = val
+        if app:
+            facts[f"applicant_data{suffix}"] = app
 
     # Leere Werte entfernen
     def clean(d):
