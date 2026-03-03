@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, ExternalLink, RefreshCw, Check, FileText,
@@ -133,15 +133,19 @@ export function CaseDetail() {
   }
   const [queue, setQueue] = useState<QueueStatus | null>(null)
 
+  const prevActiveCount = useRef<number | null>(null)
   useEffect(() => {
     if (!caseId) return
     let active = true
     const poll = async () => {
       try {
         const q = await api.get<QueueStatus>(`/api/dashboard/case/${caseId}/queue`)
-        if (active) setQueue(q)
-        // Auto-refetch case data when items finish
-        if (q.active.length === 0 && (q.total_done > 0 || q.total_error > 0)) {
+        if (!active) return
+        setQueue(q)
+        // Only refetch case data when processing just finished (active → 0)
+        const wasProcessing = prevActiveCount.current !== null && prevActiveCount.current > 0
+        prevActiveCount.current = q.active.length
+        if (wasProcessing && q.active.length === 0) {
           refetch()
         }
       } catch { /* ignore */ }
