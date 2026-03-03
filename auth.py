@@ -46,17 +46,12 @@ if not DASHBOARD_PASSWORD:
 
 # ── JWT Auth Middleware (global) ─────────────────────────────────────
 # Pfade die KEIN Token brauchen:
+# Komplett oeffentliche Pfade (kein Auth noetig):
 _PUBLIC_PATHS = {
     "/health",
     "/api/auth/login",
     "/favicon.ico",
     "/dashboard",
-    # n8n Webhook-Endpoints (kein JWT, von n8n aufgerufen)
-    "/process-email",
-    "/process-document",
-    "/ingest-answers",
-    "/full-readiness-check",
-    "/check-readiness",
 }
 
 # Pfad-Prefixe die KEIN Token brauchen:
@@ -65,17 +60,32 @@ _PUBLIC_PREFIXES = (
     "/app",
 )
 
+# n8n Webhook-Endpoints: geschuetzt via X-API-Key statt JWT
+_N8N_API_KEY = os.getenv("N8N_API_KEY", "")
+_N8N_PATHS = {
+    "/process-email",
+    "/process-document",
+    "/ingest-answers",
+    "/full-readiness-check",
+    "/check-readiness",
+}
+
+if not _N8N_API_KEY:
+    logger.warning("N8N_API_KEY nicht gesetzt! n8n-Endpoints sind UNGESCHUETZT. "
+                    "Setze N8N_API_KEY als Environment-Variable.")
+
 
 class JWTAuthMiddleware(BaseHTTPMiddleware):
     """
     Globale Middleware: Prueft JWT fuer ALLE Requests.
     Nur explizit gewhitelistete Pfade sind ausgenommen.
+    n8n-Endpoints akzeptieren X-API-Key als Alternative zu JWT.
     """
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
-        # Whitelisted Pfade durchlassen
+        # Komplett oeffentliche Pfade durchlassen
         if path in _PUBLIC_PATHS or path.startswith(_PUBLIC_PREFIXES):
             return await call_next(request)
 
@@ -83,12 +93,24 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS":
             return await call_next(request)
 
+        # n8n-Endpoints: X-API-Key ODER JWT akzeptieren
+        if path in _N8N_PATHS:
+            api_key = request.headers.get("x-api-key", "")
+            if _N8N_API_KEY and api_key == _N8N_API_KEY:
+                request.state.user = "n8n"
+                return await call_next(request)
+            # Kein API-Key? Dann JWT pruefen (Fallthrough)
+            # Wenn N8N_API_KEY nicht gesetzt → durchlassen (Warnung beim Start)
+            if not _N8N_API_KEY:
+                request.state.user = "n8n-unauthenticated"
+                return await call_next(request)
+
         # Token extrahieren
         auth_header = request.headers.get("authorization", "")
         if not auth_header.startswith("Bearer "):
             return JSONResponse(
                 status_code=401,
-                content={"detail": "Nicht autorisiert – Bearer Token erforderlich"},
+                content={"detail": "Nicht autorisiert – Bearer Token oder X-API-Key erforderlich"},
             )
 
         token = auth_header[7:]  # "Bearer " abschneiden
