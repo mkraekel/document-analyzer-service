@@ -855,6 +855,19 @@ async def dashboard_outgoing_emails(case_id: Optional[str] = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.delete("/api/dashboard/outgoing-emails")
+async def dashboard_clear_outgoing_emails():
+    """Alle Einträge in email_test_log löschen."""
+    try:
+        with db._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM email_test_log WHERE dry_run = true")
+                deleted = cur.rowcount
+        return {"deleted": deleted}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ──────────────────────────────────────────
 # API: Import Case to Europace
 # ──────────────────────────────────────────
