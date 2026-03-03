@@ -3273,7 +3273,7 @@ def check_and_send_reminders() -> dict:
     import notify
 
     active_cases = cases.get_all_active_cases()
-    reminder_statuses = {"NEEDS_QUESTIONS_PARTNER", "NEEDS_QUESTIONS_BROKER"}
+    reminder_statuses = {"NEEDS_QUESTIONS_PARTNER"}
 
     sent = 0
     checked = 0
@@ -3391,7 +3391,7 @@ async def check_reminders():
     Wird von einem n8n Schedule Trigger (1x täglich) aufgerufen.
 
     Logik:
-    - Cases mit Status NEEDS_QUESTIONS_PARTNER oder NEEDS_QUESTIONS_BROKER
+    - Cases mit Status NEEDS_QUESTIONS_PARTNER
     - Wenn last_status_change älter als REMINDER_DAYS (default: 3)
     - UND keine neue E-Mail in den letzten REMINDER_DAYS eingegangen
     - UND weniger als MAX_REMINDERS (default: 3) Erinnerungen gesendet

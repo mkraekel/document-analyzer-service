@@ -91,9 +91,6 @@ KEY_SEARCH_PATHS = {
     "partnerId": ["partnerId", "partner_id"],
 }
 
-# partnerId ist laut Doku NICHT blockierend (empfohlen) → leere Liste
-BROKER_REQUIRED = []
-
 # ============================================================
 # DOKUMENT-ANFORDERUNGEN
 # per_person=True → count wird bei Paaren verdoppelt
@@ -316,7 +313,6 @@ def check_readiness(case_id: str) -> dict:
         status: str,
         missing_financing: list,
         missing_applicant_data: list,
-        missing_broker: list,
         missing_docs: list,
         stale_docs: list,
         warnings: list,
@@ -336,7 +332,6 @@ def check_readiness(case_id: str) -> dict:
     # Ergebnisse
     missing_financing = []
     missing_applicant_data = []
-    missing_broker = []
     missing_docs = []
     stale_docs = []
     warnings = []
@@ -373,13 +368,6 @@ def check_readiness(case_id: str) -> dict:
         for key in REQUIRED_SELF_EMPLOYED_KEYS:
             if _find_value(view, key) is None:
                 missing_applicant_data.append(key)
-
-    # ──────────────────────────────────────────
-    # 4. Pflichtfelder Broker (laut Doku leer – partnerId ist empfohlen)
-    # ──────────────────────────────────────────
-    for key in BROKER_REQUIRED:
-        if not view.get(key):
-            missing_broker.append(key)
 
     # ──────────────────────────────────────────
     # 5. Empfohlene Felder (nicht blockierend → Warnungen)
@@ -517,9 +505,6 @@ def check_readiness(case_id: str) -> dict:
     elif missing_docs:
         status = "NEEDS_QUESTIONS_PARTNER"
 
-    elif missing_broker:
-        status = "NEEDS_QUESTIONS_BROKER"
-
     else:
         status = "AWAITING_BROKER_CONFIRMATION"
 
@@ -529,7 +514,6 @@ def check_readiness(case_id: str) -> dict:
         and not missing_applicant_data
         and not missing_docs
         and not stale_docs
-        and not missing_broker
     )
     is_complete = status in ("READY_FOR_IMPORT", "AWAITING_BROKER_CONFIRMATION")
 
@@ -550,7 +534,6 @@ def check_readiness(case_id: str) -> dict:
         "status": status,
         "missing_financing": missing_financing,
         "missing_applicant_data": missing_applicant_data,
-        "missing_broker": missing_broker,
         "missing_docs": missing_docs,
         "stale_docs": stale_docs,
         "warnings": warnings,

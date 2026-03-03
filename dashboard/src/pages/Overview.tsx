@@ -10,7 +10,6 @@ const STATUS_COLORS: Record<string, string> = {
   INTAKE: 'bg-gray-400',
   WAITING_FOR_DOCUMENTS: 'bg-yellow-400',
   NEEDS_QUESTIONS_PARTNER: 'bg-orange-400',
-  NEEDS_QUESTIONS_BROKER: 'bg-orange-500',
   NEEDS_MANUAL_REVIEW_BROKER: 'bg-red-400',
   AWAITING_BROKER_CONFIRMATION: 'bg-blue-400',
   READY_FOR_IMPORT: 'bg-green-400',
@@ -19,7 +18,6 @@ const STATUS_COLORS: Record<string, string> = {
 
 const ACTION_STATUSES = new Set([
   'NEEDS_QUESTIONS_PARTNER',
-  'NEEDS_QUESTIONS_BROKER',
   'NEEDS_MANUAL_REVIEW_BROKER',
   'READY_FOR_IMPORT',
 ])

@@ -587,7 +587,6 @@ def test_pipeline_endpoints():
                 mock_check.return_value = {
                     "status": "NEEDS_QUESTIONS_PARTNER",
                     "missing_financing": ["purchase_price"],
-                    "missing_broker": [],
                     "missing_docs": [],
                     "stale_docs": [],
                     "warnings": [],
@@ -615,7 +614,6 @@ def test_pipeline_endpoints():
                 mock_check.return_value = {
                     "status": "NEEDS_QUESTIONS_PARTNER",
                     "missing_financing": [],
-                    "missing_broker": [],
                     "missing_docs": [],
                     "stale_docs": [],
                     "warnings": [],
@@ -641,7 +639,6 @@ def test_pipeline_endpoints():
                 mock_check.return_value = {
                     "status": "AWAITING_BROKER_CONFIRMATION",
                     "missing_financing": [],
-                    "missing_broker": [],
                     "missing_docs": [],
                     "stale_docs": [],
                     "warnings": [],
