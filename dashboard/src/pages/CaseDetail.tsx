@@ -195,15 +195,11 @@ export function CaseDetail() {
     if (!confirm('Alle Dokumente werden neu analysiert. Extrahierte Daten werden zurückgesetzt. Fortfahren?')) return
     setBusy(true)
     try {
-      const res = await api.post<{ onedrive_scanned?: number; gdrive_processed?: number; status?: string }>(
-        `/api/dashboard/case/${caseId}/action`,
-        { action: 'REANALYZE' },
-      )
-      const parts: string[] = []
-      if (res.onedrive_scanned) parts.push(`${res.onedrive_scanned} OneDrive-Dateien`)
-      if (res.gdrive_processed) parts.push(`${res.gdrive_processed} GDrive-Dateien`)
-      addToast(parts.length ? `Neu analysiert: ${parts.join(', ')}` : 'Neuanalyse gestartet', 'success')
-      refetch()
+      await api.post(`/api/dashboard/case/${caseId}/action`, { action: 'REANALYZE' })
+      addToast('Neuanalyse gestartet – läuft im Hintergrund', 'info')
+      // Regelmäßig refreshen um Fortschritt zu zeigen
+      const interval = setInterval(refetch, 10000)
+      setTimeout(() => clearInterval(interval), 120000)
     } catch (e) {
       addToast(e instanceof Error ? e.message : 'Fehler bei Neuanalyse', 'error')
     } finally {

@@ -365,7 +365,9 @@ async def dashboard_action(case_id: str, req: ActionRequest):
         elif action == "RECHECK":
             pass  # nur Recheck, kein Override
         elif action == "REANALYZE":
-            return await _do_reanalyze(case_id)
+            import asyncio
+            asyncio.create_task(_do_reanalyze(case_id))
+            return {"success": True, "case_id": case_id, "message": "Neuanalyse gestartet (läuft im Hintergrund)"}
         else:
             raise HTTPException(status_code=400, detail=f"Unbekannte Aktion: {action}")
 
@@ -610,29 +612,13 @@ async def dashboard_process_gdrive(case_id: str, req: GDriveRequest = None):
             )
 
         import asyncio
-        # Run blocking Google Drive + GPT analysis in thread pool
-        result = await asyncio.to_thread(
-            gdrive.process_google_drive_links, case_id=case_id, links=links
-        )
-
-        # Readiness check after processing
-        readiness_result = None
-        if result.get("files_processed", 0) > 0:
-            try:
-                readiness_result = await asyncio.to_thread(rdns.check_readiness, case_id)
-                notify.dispatch_notifications(case_id, readiness_result, force=True)
-            except Exception as e:
-                logger.error(f"Readiness after gdrive failed: {e}")
+        # Fire-and-forget: GDrive-Analyse im Hintergrund
+        asyncio.create_task(_run_gdrive_background(case_id, links))
 
         return {
-            "success": result.get("success", False),
+            "success": True,
             "case_id": case_id,
-            "files_found": result.get("files_found", 0),
-            "files_processed": result.get("files_processed", 0),
-            "files_skipped": result.get("files_skipped", 0),
-            "results": result.get("results", []),
-            "errors": result.get("errors", []),
-            "readiness": readiness_result,
+            "message": "Google Drive Analyse gestartet (läuft im Hintergrund)",
         }
     except HTTPException:
         raise
@@ -663,13 +649,14 @@ def _clear_facts_for_reanalyze(case: dict):
     logger.info(f"Reanalyze: cleared facts + deleted {result.get('deleted_rows', 0)} docs for {case_id}")
 
 
-async def _do_reanalyze(case_id: str) -> dict:
-    """Führt Neuanalyse durch: OneDrive-Scan ODER Google Drive je nach Case."""
+async def _do_reanalyze(case_id: str):
+    """Führt Neuanalyse durch: OneDrive-Scan ODER Google Drive je nach Case. Läuft als Background-Task."""
     import asyncio
 
     case = cases.load_case(case_id)
     if not case:
-        raise HTTPException(status_code=404, detail="Case nicht gefunden")
+        logger.error(f"Reanalyze: Case {case_id} nicht gefunden")
+        return
 
     _clear_facts_for_reanalyze(case)
 
@@ -741,6 +728,42 @@ async def _do_reanalyze(case_id: str) -> dict:
     return results
 
 
+async def _run_scan_background(case_id: str, folder_id: str, force: bool):
+    """n8n OneDrive-Scan im Hintergrund – blockiert kein Frontend."""
+    try:
+        async with httpx.AsyncClient(timeout=300) as client:
+            resp = await client.post(N8N_SCAN_WEBHOOK, json={
+                "case_id": case_id,
+                "onedrive_folder_id": folder_id,
+                "force_reanalyze": force,
+            })
+            resp.raise_for_status()
+            result = resp.json()
+        scanned = result.get("scanned", 0)
+        logger.info(f"Scan background done for {case_id}: {scanned} scanned")
+        readiness_result = rdns.check_readiness(case_id)
+        if scanned > 0:
+            notify.dispatch_notifications(case_id, readiness_result, force=True)
+    except Exception as e:
+        logger.error(f"Scan background failed for {case_id}: {e}")
+
+
+async def _run_gdrive_background(case_id: str, links: list):
+    """GDrive-Analyse im Hintergrund – blockiert kein Frontend."""
+    try:
+        import gdrive
+        import asyncio
+        result = await asyncio.to_thread(
+            gdrive.process_google_drive_links, case_id=case_id, links=links
+        )
+        logger.info(f"GDrive background done for {case_id}: {result.get('files_processed', 0)} processed")
+        if result.get("files_processed", 0) > 0:
+            readiness_result = await asyncio.to_thread(rdns.check_readiness, case_id)
+            notify.dispatch_notifications(case_id, readiness_result, force=True)
+    except Exception as e:
+        logger.error(f"GDrive background failed for {case_id}: {e}")
+
+
 # ──────────────────────────────────────────
 # API: Scan Documents (triggers n8n OneDrive scan)
 # ──────────────────────────────────────────
@@ -768,27 +791,11 @@ async def dashboard_scan_documents(case_id: str, req: ScanRequest = None):
         if force:
             _clear_facts_for_reanalyze(case)
 
-        # n8n Webhook aufrufen – n8n listet Dateien und ruft /process-document pro Datei
-        async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(N8N_SCAN_WEBHOOK, json={
-                "case_id": case_id,
-                "onedrive_folder_id": folder_id,
-                "force_reanalyze": force,
-            })
-            resp.raise_for_status()
-            result = resp.json()
+        import asyncio
+        # Fire-and-forget: n8n Scan im Hintergrund
+        asyncio.create_task(_run_scan_background(case_id, folder_id, force))
 
-        scanned = result.get("scanned", 0)
-
-        # Nach dem Scan: Readiness Check + Notifications
-        try:
-            readiness_result = rdns.check_readiness(case_id)
-            if scanned > 0:
-                notify.dispatch_notifications(case_id, readiness_result, force=True)
-        except Exception as e:
-            logger.error(f"Readiness check after scan failed: {e}")
-
-        return {"success": True, "case_id": case_id, "scanned": scanned, "message": result.get("message", "")}
+        return {"success": True, "case_id": case_id, "message": "Scan gestartet (läuft im Hintergrund)"}
     except HTTPException:
         raise
     except Exception as e:
