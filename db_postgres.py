@@ -325,7 +325,7 @@ def update_row(table_name: str, row_id: str, row_data: dict) -> dict:
         raise
 
 
-def delete_rows(table_name: str, column: str, value: str) -> dict:
+def delete_rows(table_name: str, column: str, value) -> dict:
     """Delete rows where column matches value."""
     try:
         with _get_conn() as conn:

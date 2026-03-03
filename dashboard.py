@@ -857,13 +857,10 @@ async def dashboard_outgoing_emails(case_id: Optional[str] = None):
 
 @router.delete("/api/dashboard/outgoing-emails")
 async def dashboard_clear_outgoing_emails():
-    """Alle Einträge in email_test_log löschen."""
+    """Alle dry-run Einträge in email_test_log löschen."""
     try:
-        with db._get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("DELETE FROM email_test_log WHERE dry_run = true")
-                deleted = cur.rowcount
-        return {"deleted": deleted}
+        result = db.delete_rows("email_test_log", "dry_run", True)
+        return {"deleted": result.get("deleted_rows", 0)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
