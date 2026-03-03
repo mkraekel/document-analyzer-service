@@ -93,7 +93,7 @@ def extract_drive_ids(links: list[str]) -> list[dict]:
     return results
 
 
-def list_files_in_folder(folder_id: str, max_depth: int = 2) -> list[dict]:
+def list_files_in_folder(folder_id: str, max_depth: int = 4) -> list[dict]:
     """
     List all files in a Google Drive folder recursively.
 
