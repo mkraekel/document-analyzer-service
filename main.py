@@ -2420,6 +2420,62 @@ class ProcessDocumentResponse(BaseModel):
 # Per-Case Locks: Dokumente desselben Cases sequenziell, verschiedene Cases parallel
 _case_processing_locks: dict[str, asyncio.Lock] = {}
 
+# ── Processing Queue Tracker ──────────────────────────────────────
+# In-Memory Tracking aller laufenden/wartenden Dokument-Verarbeitungen
+# Struktur: { case_id: [ {filename, status, queued_at, started_at, finished_at, doc_type, error} ] }
+_processing_queue: dict[str, list[dict]] = {}
+_QUEUE_MAX_FINISHED = 50  # Max erledigte Items pro Case behalten
+
+
+def _queue_add(case_id: str, filename: str):
+    """Fügt Dokument zur Queue hinzu."""
+    if case_id not in _processing_queue:
+        _processing_queue[case_id] = []
+    _processing_queue[case_id].append({
+        "filename": filename,
+        "status": "queued",
+        "queued_at": datetime.utcnow().isoformat(),
+        "started_at": None,
+        "finished_at": None,
+        "doc_type": None,
+        "error": None,
+    })
+
+
+def _queue_update(case_id: str, filename: str, **kwargs):
+    """Aktualisiert Status eines Queue-Items."""
+    items = _processing_queue.get(case_id, [])
+    for item in items:
+        if item["filename"] == filename and item["status"] not in ("done", "error"):
+            item.update(kwargs)
+            break
+
+
+def _queue_cleanup(case_id: str):
+    """Entfernt alte erledigte Items."""
+    items = _processing_queue.get(case_id, [])
+    active = [i for i in items if i["status"] in ("queued", "processing")]
+    finished = [i for i in items if i["status"] in ("done", "error")]
+    _processing_queue[case_id] = active + finished[-_QUEUE_MAX_FINISHED:]
+
+
+@app.get("/api/dashboard/case/{case_id}/queue")
+async def get_processing_queue(case_id: str):
+    """Gibt den aktuellen Verarbeitungsstatus der Queue für einen Case zurück."""
+    items = _processing_queue.get(case_id, [])
+    active = [i for i in items if i["status"] in ("queued", "processing")]
+    recent_done = [i for i in items if i["status"] in ("done", "error")][-20:]
+    return {
+        "case_id": case_id,
+        "active": active,
+        "recent": recent_done,
+        "total_queued": len([i for i in items if i["status"] == "queued"]),
+        "total_processing": len([i for i in items if i["status"] == "processing"]),
+        "total_done": len([i for i in items if i["status"] == "done"]),
+        "total_error": len([i for i in items if i["status"] == "error"]),
+    }
+
+
 @app.post("/process-document", response_model=ProcessDocumentResponse)
 async def process_document(request: ProcessDocumentRequest):
     """
@@ -2434,7 +2490,9 @@ async def process_document(request: ProcessDocumentRequest):
     except Exception as e:
         return ProcessDocumentResponse(success=False, case_id=request.case_id, error=f"Base64 decode failed: {e}")
 
-    # Background-Task starten
+    # In Queue eintragen + Background-Task starten
+    _queue_add(request.case_id, request.filename)
+
     asyncio.create_task(_process_document_background(
         case_id=request.case_id,
         filename=request.filename,
@@ -2462,6 +2520,7 @@ async def _process_document_background(
     lock = _case_processing_locks[case_id]
 
     async with lock:
+        _queue_update(case_id, filename, status="processing", started_at=datetime.utcnow().isoformat())
         logger.info(f"[{case_id}] Processing {filename} (background)")
 
         # 1. Dokument analysieren (synchron → in Thread auslagern)
@@ -2469,6 +2528,7 @@ async def _process_document_background(
             result = await asyncio.to_thread(analyze_with_gpt4o, file_bytes, mime_type, filename)
         except Exception as e:
             logger.error(f"[{case_id}] Document analysis failed for {filename}: {e}")
+            _queue_update(case_id, filename, status="error", error=str(e), finished_at=datetime.utcnow().isoformat())
             db.create_row("fin_documents", {
                 "caseId": case_id,
                 "onedrive_file_id": onedrive_file_id or "",
@@ -2478,6 +2538,7 @@ async def _process_document_background(
                 "error_message": str(e),
                 "processed_at": datetime.utcnow().isoformat(),
             })
+            _queue_cleanup(case_id)
             return
 
         # 2. In fin_documents speichern (Upsert)
@@ -2530,6 +2591,11 @@ async def _process_document_background(
         except Exception as e:
             logger.error(f"[{case_id}] Readiness check failed after {filename}: {e}")
 
+        _queue_update(case_id, filename,
+                      status="done",
+                      doc_type=result.get("doc_type"),
+                      finished_at=datetime.utcnow().isoformat())
+        _queue_cleanup(case_id)
         logger.info(f"[{case_id}] Done processing {filename} → {result.get('doc_type', '?')}")
 
 

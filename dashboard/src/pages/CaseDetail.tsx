@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, ExternalLink, RefreshCw, Check, FileText,
-  Mail, Clock, Shield, ChevronDown, ChevronUp, Pencil, X as XIcon, Save, Eye
+  Mail, Clock, Shield, ChevronDown, ChevronUp, Pencil, X as XIcon, Save, Eye, Loader
 } from 'lucide-react'
 import { useApiGet } from '../hooks/useApi'
 import { useToast } from '../hooks/useToast'
@@ -112,6 +112,44 @@ export function CaseDetail() {
   const { toasts, addToast, removeToast } = useToast()
   const [busy, setBusy] = useState(false)
   const [showAllDocs, setShowAllDocs] = useState(false)
+
+  // ── Processing Queue Polling ──
+  interface QueueItem {
+    filename: string
+    status: 'queued' | 'processing' | 'done' | 'error'
+    queued_at: string
+    started_at: string | null
+    finished_at: string | null
+    doc_type: string | null
+    error: string | null
+  }
+  interface QueueStatus {
+    active: QueueItem[]
+    recent: QueueItem[]
+    total_queued: number
+    total_processing: number
+    total_done: number
+    total_error: number
+  }
+  const [queue, setQueue] = useState<QueueStatus | null>(null)
+
+  useEffect(() => {
+    if (!caseId) return
+    let active = true
+    const poll = async () => {
+      try {
+        const q = await api.get<QueueStatus>(`/api/dashboard/case/${caseId}/queue`)
+        if (active) setQueue(q)
+        // Auto-refetch case data when items finish
+        if (q.active.length === 0 && (q.total_done > 0 || q.total_error > 0)) {
+          refetch()
+        }
+      } catch { /* ignore */ }
+    }
+    poll()
+    const interval = setInterval(poll, 3000)
+    return () => { active = false; clearInterval(interval) }
+  }, [caseId])
   const [expandedSections, setExpandedSections] = useState<Set<string>>(
     new Set(['readiness', 'financing', 'documents']),
   )
@@ -497,6 +535,64 @@ export function CaseDetail() {
           </div>
         ))}
       </Section>
+
+      {/* Processing Queue */}
+      {queue && (queue.active.length > 0 || queue.recent.length > 0) && (
+        <div className="bg-white rounded-xl border border-blue-200 shadow-sm mb-4">
+          <div className="px-4 py-3 border-b border-blue-100 flex items-center gap-2">
+            {queue.active.length > 0 && <Loader size={16} className="animate-spin text-blue-500" />}
+            <h3 className="text-sm font-semibold text-blue-900">
+              Verarbeitungs-Queue
+              {queue.active.length > 0 && (
+                <span className="ml-2 text-xs font-normal text-blue-600">
+                  {queue.total_processing > 0 && `${queue.total_processing} in Analyse`}
+                  {queue.total_processing > 0 && queue.total_queued > 0 && ', '}
+                  {queue.total_queued > 0 && `${queue.total_queued} wartend`}
+                </span>
+              )}
+            </h3>
+          </div>
+          <div className="px-4 py-2 space-y-1 max-h-[300px] overflow-y-auto">
+            {[...queue.active, ...queue.recent].map((item, i) => (
+              <div key={`${item.filename}-${i}`} className="flex items-center gap-2 py-1.5 text-sm border-b border-gray-50 last:border-0">
+                {item.status === 'queued' && (
+                  <span className="w-2 h-2 rounded-full bg-gray-300 flex-shrink-0" title="Wartend" />
+                )}
+                {item.status === 'processing' && (
+                  <Loader size={12} className="animate-spin text-blue-500 flex-shrink-0" />
+                )}
+                {item.status === 'done' && (
+                  <Check size={12} className="text-green-500 flex-shrink-0" />
+                )}
+                {item.status === 'error' && (
+                  <XIcon size={12} className="text-red-500 flex-shrink-0" />
+                )}
+                <span className="truncate text-gray-700 flex-1" title={item.filename}>
+                  {item.filename}
+                </span>
+                {item.doc_type && (
+                  <span className="text-xs text-gray-400 flex-shrink-0">{item.doc_type}</span>
+                )}
+                {item.error && (
+                  <span className="text-xs text-red-500 truncate max-w-[200px]" title={item.error}>
+                    {item.error}
+                  </span>
+                )}
+                <span className={`text-xs px-1.5 py-0.5 rounded flex-shrink-0 ${
+                  item.status === 'queued' ? 'bg-gray-100 text-gray-500' :
+                  item.status === 'processing' ? 'bg-blue-50 text-blue-600' :
+                  item.status === 'done' ? 'bg-green-50 text-green-600' :
+                  'bg-red-50 text-red-600'
+                }`}>
+                  {item.status === 'queued' ? 'wartend' :
+                   item.status === 'processing' ? 'analysiert...' :
+                   item.status === 'done' ? 'fertig' : 'Fehler'}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Documents */}
       <Section
