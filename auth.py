@@ -9,6 +9,7 @@ Konfiguration ueber Environment-Variablen:
 """
 
 import os
+import sys
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -18,6 +19,8 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError
 from passlib.context import CryptContext
 from pydantic import BaseModel
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 
@@ -29,13 +32,79 @@ JWT_EXPIRY_HOURS = int(os.getenv("JWT_EXPIRY_HOURS", "24"))
 DASHBOARD_USER = os.getenv("DASHBOARD_USER", "admin")
 DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "")
 
+# ── Startup-Absicherung ─────────────────────────────────────────────
 if JWT_SECRET == "dev-secret-change-in-production":
-    logger.warning("JWT_SECRET nicht gesetzt – verwende unsicheren Default. "
-                    "Setze JWT_SECRET in Production!")
+    logger.critical("FATAL: JWT_SECRET ist der unsichere Default! "
+                    "Setze JWT_SECRET als Environment-Variable.")
+    sys.exit(1)
 
 if not DASHBOARD_PASSWORD:
-    logger.warning("DASHBOARD_PASSWORD nicht gesetzt – Login ist deaktiviert bis "
-                    "ein Passwort gesetzt wird.")
+    logger.critical("FATAL: DASHBOARD_PASSWORD nicht gesetzt! "
+                    "Setze DASHBOARD_PASSWORD als Environment-Variable.")
+    sys.exit(1)
+
+
+# ── JWT Auth Middleware (global) ─────────────────────────────────────
+# Pfade die KEIN Token brauchen:
+_PUBLIC_PATHS = {
+    "/health",
+    "/api/auth/login",
+    "/favicon.ico",
+    "/dashboard",
+}
+
+# Pfad-Prefixe die KEIN Token brauchen:
+_PUBLIC_PREFIXES = (
+    "/app/",
+    "/app",
+)
+
+
+class JWTAuthMiddleware(BaseHTTPMiddleware):
+    """
+    Globale Middleware: Prueft JWT fuer ALLE Requests.
+    Nur explizit gewhitelistete Pfade sind ausgenommen.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+
+        # Whitelisted Pfade durchlassen
+        if path in _PUBLIC_PATHS or path.startswith(_PUBLIC_PREFIXES):
+            return await call_next(request)
+
+        # OPTIONS Requests fuer CORS Preflight durchlassen
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
+        # Token extrahieren
+        auth_header = request.headers.get("authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Nicht autorisiert – Bearer Token erforderlich"},
+            )
+
+        token = auth_header[7:]  # "Bearer " abschneiden
+
+        # Token validieren
+        try:
+            payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            username = payload.get("sub", "")
+            if not username:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Ungueltiger Token"},
+                )
+            # Username im Request State speichern fuer Downstream
+            request.state.user = username
+        except JWTError:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Token abgelaufen oder ungueltig"},
+            )
+
+        return await call_next(request)
 
 # ── Password Hashing ────────────────────────────────────────────────
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")

@@ -43,6 +43,10 @@ from typing import Optional
 
 app = FastAPI(title="Document Analyzer", version="1.0.0")
 
+# ── Globale JWT Auth Middleware ───────────────────────────────────
+from auth import JWTAuthMiddleware
+app.add_middleware(JWTAuthMiddleware)
+
 # ── Legacy Redirect ───────────────────────────────────────────────
 from fastapi.responses import RedirectResponse as _Redirect
 
@@ -1921,68 +1925,6 @@ REQUIRED_TABLE_COLUMNS = {
 }
 
 
-@app.post("/setup/tables")
-async def setup_tables():
-    """
-    Stellt sicher dass alle benötigten Spalten in allen Tabellen existieren.
-    Einmal aufrufen nach dem Deployment – fehlende Spalten werden angelegt.
-    """
-    results = {}
-    for table_name, columns in REQUIRED_TABLE_COLUMNS.items():
-        try:
-            result = db.ensure_columns(table_name, columns)
-            results[table_name] = result
-        except Exception as e:
-            results[table_name] = {"error": str(e)}
-    return results
-
-
-@app.get("/debug/columns/{table_name}")
-async def debug_columns(table_name: str):
-    """Zeigt alle Spalten einer Tabelle an"""
-    columns = db.get_columns(table_name)
-    return {
-        "table": table_name,
-        "columns": [{"name": c["name"], "type": c.get("type", "?")} for c in columns]
-    }
-
-
-@app.get("/debug/db")
-async def debug_db():
-    """Testet Datenbankverbindung und gibt Details zurück"""
-    backend = os.getenv("DB_BACKEND", "postgres")
-    results = {"backend": backend}
-
-    if backend == "seatable":
-        import requests as _req
-        results["env"] = {
-            "SEATABLE_API_TOKEN_set": bool(os.getenv("SEATABLE_API_TOKEN")),
-            "SEATABLE_BASE_UUID_set": bool(os.getenv("SEATABLE_BASE_UUID")),
-            "SEATABLE_BASE_URL": os.getenv("SEATABLE_BASE_URL", "https://cloud.seatable.io"),
-        }
-        try:
-            db.invalidate_token()
-            token = db._get_access_token()
-            results["auth"] = "ok"
-            results["uuid"] = db._get_uuid()
-        except Exception as e:
-            results["auth"] = f"FAILED: {e}"
-            return results
-    else:
-        results["env"] = {
-            "DATABASE_URL_set": bool(os.getenv("DATABASE_URL")),
-        }
-
-    # Tabellen testen
-    for table in ["fin_cases", "processed_emails", "fin_documents", "email_test_log"]:
-        try:
-            rows = db.search_rows(table, "_id", "__nonexistent__")
-            results[table] = "ok"
-        except Exception as e:
-            results[table] = f"FAILED: {e}"
-
-    return results
-
 class ProcessEmailRequest(BaseModel):
     provider_message_id: str
     conversation_id: Optional[str] = None
@@ -2904,23 +2846,6 @@ async def admin_cleanup_emails():
         except Exception as e:
             results[result_type] = f"error: {e}"
     return {"cleaned": results}
-
-
-@app.post("/admin/clear-db")
-async def admin_clear_db():
-    """Loescht ALLE Daten aus allen Tabellen. Nur fuer Development/Testing."""
-    import db_postgres as _pg
-    tables = ["email_test_log", "fin_documents", "processed_emails", "fin_cases"]
-    results = {}
-    for table in tables:
-        try:
-            with _pg._get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {table}")
-                    results[table] = cur.rowcount
-        except Exception as e:
-            results[table] = f"error: {e}"
-    return {"cleared": results}
 
 
 # ============================================
