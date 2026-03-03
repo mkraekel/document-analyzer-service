@@ -2410,108 +2410,127 @@ class ProcessDocumentRequest(BaseModel):
 class ProcessDocumentResponse(BaseModel):
     success: bool
     case_id: str
+    queued: bool = False
     doc_type: Optional[str] = None
     confidence: Optional[str] = None
     facts_merged: bool = False
     readiness: Optional[dict] = None
     error: Optional[str] = None
 
+# Per-Case Locks: Dokumente desselben Cases sequenziell, verschiedene Cases parallel
+_case_processing_locks: dict[str, asyncio.Lock] = {}
+
 @app.post("/process-document", response_model=ProcessDocumentResponse)
 async def process_document(request: ProcessDocumentRequest):
     """
-    Analysiert ein Dokument und mergt die Facts in den Case.
-    n8n lädt Datei von OneDrive herunter und sendet sie base64-kodiert.
+    Nimmt Dokument an und verarbeitet es im Hintergrund.
+    Gibt sofort 200 OK zurück — keine Timeouts mehr.
     """
-    logger.info(f"process-document: {request.case_id} / {request.filename}")
+    logger.info(f"process-document: {request.case_id} / {request.filename} → queued")
 
-    # 1. Datei dekodieren
+    # Base64 sofort validieren (schnell, fängt kaputte Requests ab)
     try:
         file_bytes = base64.b64decode(request.data_base64)
     except Exception as e:
         return ProcessDocumentResponse(success=False, case_id=request.case_id, error=f"Base64 decode failed: {e}")
 
-    # 2. Dokument analysieren (bestehende Logik)
-    try:
-        result = analyze_with_gpt4o(file_bytes, request.mime_type, request.filename)
-    except Exception as e:
-        logger.error(f"Document analysis failed: {e}")
-        # In SeaTable als Fehler speichern
-        db.create_row("fin_documents", {
-            "caseId": request.case_id,
-            "onedrive_file_id": request.onedrive_file_id or "",
-            "file_name": request.filename,
-            "doc_type": "error",
-            "processing_status": "error",
-            "error_message": str(e),
-            "processed_at": __import__("datetime").datetime.utcnow().isoformat(),
-        })
-        return ProcessDocumentResponse(success=False, case_id=request.case_id, error=str(e))
-
-    # 3. In fin_documents speichern (Upsert: update wenn schon vorhanden)
-    extracted = result.get("extracted_data") or {}
-    doc_data = {
-        "doc_type": result.get("doc_type", "Sonstiges"),
-        "extracted_data": json.dumps(extracted),
-        "processing_status": "completed",
-        "processed_at": __import__("datetime").datetime.utcnow().isoformat(),
-    }
-    # Prüfe ob Dokument schon existiert (by onedrive_file_id oder file_name)
-    existing_doc = None
-    existing_docs = db.search_rows("fin_documents", "caseId", request.case_id)
-    for d in existing_docs:
-        if request.onedrive_file_id and d.get("onedrive_file_id") == request.onedrive_file_id:
-            existing_doc = d
-            break
-        if d.get("file_name") == request.filename:
-            existing_doc = d
-            break
-    if existing_doc:
-        db.update_row("fin_documents", existing_doc["_id"], doc_data)
-    else:
-        doc_data["caseId"] = request.case_id
-        doc_data["onedrive_file_id"] = request.onedrive_file_id or ""
-        doc_data["file_name"] = request.filename
-        db.create_row("fin_documents", doc_data)
-
-    # 4. Facts in Case mergen
-    try:
-        doc_type = result.get("doc_type", "")
-        _person = (result.get("meta") or {}).get("person_name")
-        # Case laden fuer applicant_name (per-person routing)
-        _case = cases.load_case(request.case_id)
-        _case_name = _case.get("applicant_name") if _case else None
-        new_facts = _map_extracted_to_facts(
-            doc_type, extracted,
-            person_name=_person,
-            case_applicant_name=_case_name,
-        )
-        if new_facts:
-            cases.save_facts(request.case_id, new_facts, source=f"document:{doc_type}")
-        facts_merged = bool(new_facts)
-
-        # Applicant name ggf. korrigieren
-        if doc_type in ("Ausweiskopie", "Selbstauskunft") and _person:
-            _maybe_update_applicant_name(request.case_id, _person)
-    except Exception as e:
-        logger.error(f"Facts merge failed: {e}")
-        facts_merged = False
-
-    # 5. Readiness Check (Status in SeaTable updaten, KEIN Notify)
-    # Notification läuft einmalig in n8n nach allen Docs via /full-readiness-check
-    readiness_result = None
-    try:
-        readiness_result = rdns.check_readiness(request.case_id)
-    except Exception as e:
-        logger.error(f"Readiness check after document failed: {e}")
+    # Background-Task starten
+    asyncio.create_task(_process_document_background(
+        case_id=request.case_id,
+        filename=request.filename,
+        file_bytes=file_bytes,
+        mime_type=request.mime_type or "application/pdf",
+        onedrive_file_id=request.onedrive_file_id,
+    ))
 
     return ProcessDocumentResponse(
         success=True,
         case_id=request.case_id,
-        doc_type=result.get("doc_type"),
-        confidence=result.get("confidence"),
-        facts_merged=facts_merged,
-        readiness=readiness_result,
+        queued=True,
     )
+
+
+async def _process_document_background(
+    case_id: str, filename: str, file_bytes: bytes,
+    mime_type: str, onedrive_file_id: str = None,
+):
+    """Verarbeitet ein Dokument im Hintergrund mit per-Case Lock."""
+
+    # Per-Case Lock holen/erstellen
+    if case_id not in _case_processing_locks:
+        _case_processing_locks[case_id] = asyncio.Lock()
+    lock = _case_processing_locks[case_id]
+
+    async with lock:
+        logger.info(f"[{case_id}] Processing {filename} (background)")
+
+        # 1. Dokument analysieren (synchron → in Thread auslagern)
+        try:
+            result = await asyncio.to_thread(analyze_with_gpt4o, file_bytes, mime_type, filename)
+        except Exception as e:
+            logger.error(f"[{case_id}] Document analysis failed for {filename}: {e}")
+            db.create_row("fin_documents", {
+                "caseId": case_id,
+                "onedrive_file_id": onedrive_file_id or "",
+                "file_name": filename,
+                "doc_type": "error",
+                "processing_status": "error",
+                "error_message": str(e),
+                "processed_at": datetime.utcnow().isoformat(),
+            })
+            return
+
+        # 2. In fin_documents speichern (Upsert)
+        extracted = result.get("extracted_data") or {}
+        doc_data = {
+            "doc_type": result.get("doc_type", "Sonstiges"),
+            "extracted_data": json.dumps(extracted),
+            "processing_status": "completed",
+            "processed_at": datetime.utcnow().isoformat(),
+        }
+        existing_doc = None
+        existing_docs = db.search_rows("fin_documents", "caseId", case_id)
+        for d in existing_docs:
+            if onedrive_file_id and d.get("onedrive_file_id") == onedrive_file_id:
+                existing_doc = d
+                break
+            if d.get("file_name") == filename:
+                existing_doc = d
+                break
+        if existing_doc:
+            db.update_row("fin_documents", existing_doc["_id"], doc_data)
+        else:
+            doc_data["caseId"] = case_id
+            doc_data["onedrive_file_id"] = onedrive_file_id or ""
+            doc_data["file_name"] = filename
+            db.create_row("fin_documents", doc_data)
+
+        # 3. Facts in Case mergen
+        try:
+            doc_type = result.get("doc_type", "")
+            _person = (result.get("meta") or {}).get("person_name")
+            _case = cases.load_case(case_id)
+            _case_name = _case.get("applicant_name") if _case else None
+            new_facts = _map_extracted_to_facts(
+                doc_type, extracted,
+                person_name=_person,
+                case_applicant_name=_case_name,
+            )
+            if new_facts:
+                cases.save_facts(case_id, new_facts, source=f"document:{doc_type}")
+
+            if doc_type in ("Ausweiskopie", "Selbstauskunft") and _person:
+                _maybe_update_applicant_name(case_id, _person)
+        except Exception as e:
+            logger.error(f"[{case_id}] Facts merge failed for {filename}: {e}")
+
+        # 4. Readiness Check
+        try:
+            rdns.check_readiness(case_id)
+        except Exception as e:
+            logger.error(f"[{case_id}] Readiness check failed after {filename}: {e}")
+
+        logger.info(f"[{case_id}] Done processing {filename} → {result.get('doc_type', '?')}")
 
 
 def _clean_person_name(name: str) -> str:
