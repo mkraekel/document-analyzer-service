@@ -51,6 +51,12 @@ _PUBLIC_PATHS = {
     "/api/auth/login",
     "/favicon.ico",
     "/dashboard",
+    # n8n Webhook-Endpoints (kein JWT, von n8n aufgerufen)
+    "/process-email",
+    "/process-document",
+    "/ingest-answers",
+    "/full-readiness-check",
+    "/check-readiness",
 }
 
 # Pfad-Prefixe die KEIN Token brauchen:
