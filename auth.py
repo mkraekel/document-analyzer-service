@@ -87,6 +87,8 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
 
         # X-API-Key pruefen (fuer n8n und externe Services)
         api_key = request.headers.get("x-api-key", "")
+        if api_key:
+            logger.info(f"[AUTH] X-API-Key received for {path} (key_len={len(api_key)}, expected_len={len(_N8N_API_KEY)}, match={api_key == _N8N_API_KEY})")
         if api_key and _N8N_API_KEY and api_key == _N8N_API_KEY:
             request.state.user = "n8n"
             return await call_next(request)
@@ -152,8 +154,13 @@ async def get_current_user(
 ) -> str:
     """
     Dependency: Extrahiert und validiert JWT aus dem Authorization-Header.
+    Akzeptiert auch X-API-Key Auth (bereits von Middleware validiert).
     Gibt den Username zurueck oder wirft 401.
     """
+    # Middleware hat bereits via X-API-Key authentifiziert
+    if hasattr(request.state, "user") and request.state.user:
+        return request.state.user
+
     if not credentials:
         raise HTTPException(status_code=401, detail="Nicht autorisiert")
 
