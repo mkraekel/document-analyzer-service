@@ -222,6 +222,11 @@ def _compute_effective_view(case: dict) -> dict:
     Baut effektive Sicht: manual_overrides > answers_user > facts_extracted > derived_values
     Flacht answers_user (partner + broker) in eine Ebene.
     """
+    # Statistische Defaults (häufigste Werte) – niedrigste Priorität
+    defaults = {
+        "object_type": "ETW",
+        "usage": "Vermietet",
+    }
     derived = case.get("_derived_values", {})
     facts = case.get("_facts_extracted", {})
     answers_raw = case.get("_answers_user", {})
@@ -239,7 +244,7 @@ def _compute_effective_view(case: dict) -> dict:
             answers_flat[k] = v
 
     view = {}
-    for src in [derived, facts, answers_flat, overrides]:
+    for src in [defaults, derived, facts, answers_flat, overrides]:
         if isinstance(src, dict):
             view.update({k: v for k, v in src.items() if v is not None and v != ""})
 
