@@ -163,6 +163,8 @@ Für Ausweise (inkl. Reisepass, Personalausweis):
 - Ausweisnummer, Gültig bis, Ausstellungsbehörde
 
 Für Gehaltsnachweise (inkl. Entgeltnachweis, Gehaltsabrechnung):
+- Vorname, Nachname
+- Strasse, Hausnummer, PLZ, Ort (Wohnadresse des Arbeitnehmers, falls angegeben)
 - Arbeitgeber, Brutto, Netto, Monat/Jahr
 - Steuerklasse, Sozialversicherungsbeiträge
 
