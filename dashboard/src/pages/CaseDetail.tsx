@@ -70,6 +70,7 @@ const EUROPACE_GROUPS = [
       { key: 'employer', paths: ['employer', 'applicant_data.employer'] },
       { key: 'employed_since', paths: ['employed_since', 'applicant_data.employed_since'] },
       { key: 'net_income', paths: ['net_income', 'applicant_data.net_income'] },
+      { key: 'monthly_rental_income', paths: ['monthly_rental_income'] },
     ],
   },
   {
@@ -94,13 +95,11 @@ const EUROPACE_GROUPS = [
       { key: 'wunschrate', paths: ['wunschrate'] },
     ],
   },
-  {
-    title: 'Vermittler',
-    fields: [
-      { key: 'partnerId', paths: ['partnerId'] },
-      { key: 'tippgeberPartnerId', paths: ['tippgeberPartnerId'] },
-    ],
-  },
+]
+
+const PARTNER_OPTIONS = [
+  { id: 'CZU26', label: 'Alexander Heil (CZU26)' },
+  { id: 'XET70', label: 'Matthias Lächele (XET70)' },
 ]
 
 export function CaseDetail() {
@@ -504,6 +503,20 @@ export function CaseDetail() {
           </div>
         )}
 
+        {/* Warnings */}
+        {(readiness.warnings || []).length > 0 && (
+          <div className="mb-4">
+            <h4 className="text-sm font-medium text-amber-700 mb-2">Hinweise</h4>
+            <div className="space-y-1.5">
+              {(readiness.warnings as string[]).map((w: string, i: number) => (
+                <div key={i} className="bg-amber-50 text-sm text-amber-800 rounded-lg px-3 py-2">
+                  {w}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Overrides Applied */}
         {(readiness.manual_overrides_applied || []).length > 0 && (
           <div>
@@ -597,6 +610,22 @@ export function CaseDetail() {
             </div>
           </div>
         ))}
+        {/* Vermittler Dropdowns */}
+        <div className="mb-5 last:mb-0">
+          <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
+            Vermittler
+          </h4>
+          <div className="grid gap-1">
+            <PartnerSelect
+              label="Partner-ID"
+              value={findValue(effectiveView, 'partnerId')}
+              caseId={caseId!}
+              fieldKey="partnerId"
+              onSaved={refetch}
+              addToast={addToast}
+            />
+          </div>
+        </div>
       </Section>
 
       {/* Processing Queue */}
@@ -988,6 +1017,53 @@ function EditableDataGrid({
           )}
         </div>
       ))}
+    </div>
+  )
+}
+
+/* Partner-ID Dropdown */
+function PartnerSelect({
+  label,
+  value,
+  caseId,
+  fieldKey,
+  onSaved,
+  addToast,
+}: {
+  label: string
+  value: string
+  caseId: string
+  fieldKey: string
+  onSaved: () => void
+  addToast: (msg: string, type: 'success' | 'error' | 'info') => void
+}) {
+  async function handleChange(newValue: string) {
+    try {
+      await api.post(`/api/dashboard/case/${caseId}/update-field`, {
+        field: fieldKey,
+        value: newValue,
+        target: 'overrides',
+      })
+      addToast(`${label} gespeichert`, 'success')
+      onSaved()
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : 'Fehler', 'error')
+    }
+  }
+
+  return (
+    <div className="flex items-center justify-between py-1.5 px-3 rounded bg-gray-50">
+      <span className="text-xs font-medium text-gray-500">{label}</span>
+      <select
+        value={value || ''}
+        onChange={e => handleChange(e.target.value)}
+        className="text-sm text-gray-900 bg-white border border-gray-300 rounded px-2 py-1 cursor-pointer hover:border-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500"
+      >
+        <option value="">– Auswählen –</option>
+        {PARTNER_OPTIONS.map(opt => (
+          <option key={opt.id} value={opt.id}>{opt.label}</option>
+        ))}
+      </select>
     </div>
   )
 }

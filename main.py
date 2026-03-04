@@ -165,8 +165,9 @@ Für Ausweise (inkl. Reisepass, Personalausweis):
 Für Gehaltsnachweise (inkl. Entgeltnachweis, Gehaltsabrechnung):
 - Vorname, Nachname
 - Strasse, Hausnummer, PLZ, Ort (Wohnadresse des Arbeitnehmers, falls angegeben)
-- Arbeitgeber, Brutto, Netto, Monat/Jahr
+- Arbeitgeber, Brutto, Netto, Auszahlungsbetrag, Monat/Jahr
 - Steuerklasse, Sozialversicherungsbeiträge
+- WICHTIG: "Netto" ist das steuerliche Netto VOR Abzügen (VWL, Kirchensteuer, etc.). "Auszahlungsbetrag" ist der tatsächlich ausgezahlte Betrag. Beide Werte extrahieren wenn vorhanden!
 
 Für Kontoauszüge:
 - Bank, IBAN, Kontostand, Zeitraum
@@ -1366,7 +1367,8 @@ FIELD_DESCRIPTIONS = {
     "object_address": "Adresse der Immobilie",
     "applicant_birth_date": "Geburtsdatum",
     "applicant_employer": "Arbeitgeber",
-    "applicant_income": "Monatliches Nettoeinkommen"
+    "applicant_income": "Monatliches Nettoeinkommen",
+    "monthly_rental_income": "Monatliche Mieteinnahmen (Kaltmiete)"
 }
 
 
@@ -2736,12 +2738,16 @@ def _map_extracted_to_facts(doc_type: str, extracted: dict,
     elif doc_type in ("Gehaltsnachweis", "Gehaltsabrechnung", "Gehaltsabrechnung Dezember", "Lohnsteuerbescheinigung"):
         _arbeitgeber = extracted.get("Arbeitgeber")
         _netto = extracted.get("Netto")
+        _auszahlung = extracted.get("Auszahlungsbetrag")
+        # Auszahlungsbetrag hat Vorrang vor Netto (Netto ist vor Abzügen wie VWL etc.)
+        _effective_net = _auszahlung or _netto
         facts[f"income_data{suffix}"] = {
             "arbeitgeber": _arbeitgeber,
             "employer": _arbeitgeber,
             "brutto": extracted.get("Brutto"),
             "netto": _netto,
-            "net_income": _netto,
+            "auszahlungsbetrag": _auszahlung,
+            "net_income": _effective_net,
             "steuerklasse": extracted.get("Steuerklasse"),
         }
         facts[f"employment_data{suffix}"] = {
@@ -2754,7 +2760,7 @@ def _map_extracted_to_facts(doc_type: str, extracted: dict,
         _nachname = extracted.get("Nachname")
         ad = {
             "employer": _arbeitgeber,
-            "net_income": _netto,
+            "net_income": _effective_net,
             "employment_type": "Angestellter",
         }
         if _vorname:

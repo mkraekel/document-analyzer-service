@@ -89,6 +89,7 @@ KEY_SEARCH_PATHS = {
     "year_built": ["property_data.year_built", "year_built", "baujahr"],
     "zinsbindung": ["zinsbindung", "financing_data.zinsbindung"],
     "partnerId": ["partnerId", "partner_id"],
+    "monthly_rental_income": ["monthly_rental_income", "rental_data.cold_rent", "tax_data.income_rental"],
 }
 
 # ============================================================
@@ -161,11 +162,13 @@ DOC_TYPE_ALIASES: dict[str, list[str]] = {
     ],
     "Grundriss": [
         "Wohnungsgrundriss", "Grundrisszeichnung", "Grundrissplan",
+        "Flurkarte", "Lageplan", "Katasterkarte", "Liegenschaftskarte",
     ],
     "Eigenkapitalnachweis": [
         "Finanzstatus", "Vermögensaufstellung", "Depotauszug",
         "Sparkontoauszug", "Kontostände", "Vermögensstatus",
         "Kontoübersicht", "Bankkontenübersicht", "Depotnachweis",
+        "Zinsbescheinigung",
     ],
     "Steuererklärung": [
         "Einkommensteuererklärung", "Steuererklärung (Anlage)",
@@ -253,7 +256,89 @@ def _compute_effective_view(case: dict) -> dict:
         if not view.get(top_key) and case.get(top_key):
             view[top_key] = case[top_key]
 
+    # Anrede aus Vorname ableiten wenn nicht vorhanden
+    if not view.get("salutation"):
+        first_name = (
+            view.get("applicant_first_name")
+            or _get_nested(view, "applicant_data.first_name")
+            or _get_nested(view, "applicant_data.vorname")
+            or ""
+        ).strip()
+        if first_name:
+            guessed = _guess_salutation(first_name)
+            if guessed:
+                view["salutation"] = guessed
+
     return view
+
+
+# Häufige deutsche Vornamen für Anrede-Erkennung
+_FEMALE_NAMES = {
+    "anna", "andrea", "angelika", "anja", "annette", "antje", "astrid",
+    "barbara", "beate", "birgit", "brigitte", "britta",
+    "carmen", "carola", "caroline", "charlotte", "christa", "christiane", "christina", "claudia", "cornelia",
+    "daniela", "diana", "doris", "dorothea",
+    "elena", "elisa", "elisabeth", "ella", "elke", "emma", "erika", "eva",
+    "franziska", "frieda", "friederike",
+    "gabriele", "gerda", "gisela", "gudrun",
+    "hannah", "heide", "heidi", "heike", "helga", "henriette", "hildegard",
+    "ilona", "ines", "ingrid", "irene", "iris",
+    "jana", "janina", "jasmin", "jennifer", "jessica", "johanna", "judith", "julia", "juliane",
+    "karin", "karla", "katharina", "kathrin", "katja", "katrin", "kerstin", "kirsten", "klara", "kristin",
+    "larissa", "laura", "lea", "lena", "linda", "lisa", "lotte", "louisa", "lucia", "luise",
+    "manuela", "margarete", "margit", "maria", "marie", "marina", "marlene", "martina", "melanie", "michaela", "miriam", "monika",
+    "nadine", "natascha", "nicole", "nina", "nora",
+    "olga",
+    "patricia", "paula", "petra", "pia",
+    "regina", "renate", "rita", "rosa", "rosemarie", "ruth",
+    "sabine", "sabrina", "sandra", "sara", "sarah", "silke", "silvia", "simone", "sofia", "sophie", "stefanie", "stephanie", "susanne", "svenja",
+    "tamara", "tanja", "tatjana", "teresa", "theresa", "tina",
+    "ulrike", "ursula", "uta",
+    "vanessa", "vera", "veronika",
+    "waltraud", "wiebke",
+    "yvonne",
+}
+
+_MALE_NAMES = {
+    "achim", "adam", "adrian", "albert", "alexander", "alfred", "andreas", "anton", "armin", "arno", "arthur", "axel",
+    "bastian", "benjamin", "bernd", "bernhard", "björn", "boris", "bruno",
+    "carl", "carsten", "christian", "christoph", "claus", "clemens",
+    "daniel", "david", "dennis", "detlef", "dieter", "dietmar", "dirk", "dominik",
+    "eckhard", "edgar", "edmund", "eduard", "egon", "erich", "ernst", "erwin", "eugen",
+    "fabian", "felix", "ferdinand", "florian", "frank", "franz", "frederik", "friedhelm", "friedrich", "fritz",
+    "georg", "gerald", "gerd", "gerhard", "gregor", "guenter", "günter", "günther", "gustav",
+    "hans", "harald", "hartmut", "heinrich", "helmut", "hendrik", "henning", "henry", "herbert", "hermann", "horst", "hubert", "hugo",
+    "ingo",
+    "jan", "jens", "joachim", "jochen", "johann", "johannes", "jonas", "jonathan", "joerg", "jörg", "josef", "juergen", "jürgen", "julian", "julius",
+    "kai", "karl", "karsten", "klaus", "konrad", "kurt",
+    "lars", "leon", "leonhard", "lorenz", "lothar", "ludwig", "lukas", "lutz",
+    "manfred", "marc", "marcel", "marco", "marcus", "mario", "markus", "martin", "mathias", "matthias", "max", "maximilian", "michael", "moritz",
+    "nico", "nicolas", "niklas", "nikolaus", "norbert",
+    "olaf", "oliver", "oskar", "otto",
+    "pascal", "patrick", "paul", "peter", "philipp",
+    "rainer", "ralf", "ralph", "reinhard", "reinhold", "richard", "robert", "robin", "roland", "rolf", "roman", "rudi", "rudolf", "ruediger", "rüdiger",
+    "sascha", "sebastian", "siegfried", "simon", "stefan", "steffen", "stephan", "sven",
+    "theo", "theodor", "thomas", "thorsten", "till", "timo", "tobias", "tom", "torsten",
+    "uwe", "udo", "ulrich",
+    "valentin", "viktor", "volker",
+    "walter", "werner", "wilhelm", "willi", "wolfgang",
+}
+
+
+def _guess_salutation(first_name: str) -> Optional[str]:
+    """Versucht die Anrede anhand des Vornamens zu erraten."""
+    name = first_name.lower().strip()
+    # Bei zusammengesetzten Vornamen den ersten Teil nehmen
+    name = name.split()[0] if " " in name else name
+    name = name.split("-")[0] if "-" in name else name
+    if name in _FEMALE_NAMES:
+        return "Frau"
+    if name in _MALE_NAMES:
+        return "Herr"
+    # Heuristik: Namen auf -a, -e (nicht -ke, -se, -te) sind oft weiblich
+    if name.endswith("a") and len(name) > 2:
+        return "Frau"
+    return None
 
 
 def _doc_age_ok(doc: dict, max_age_days: Optional[int]) -> bool:
@@ -503,6 +588,23 @@ def check_readiness(case_id: str) -> dict:
         if effective_months >= 3:
             missing_docs = [d for d in missing_docs if d["type"] != "Eigenkapitalnachweis"]
             logger.info(f"[{case_id}] Eigenkapitalnachweis durch {len(kontoauszug_docs)} Kontoauszüge ({effective_months} Monate) abgedeckt")
+
+    # ──────────────────────────────────────────
+    # 6c. Mieteinnahmen-Hinweis
+    # ──────────────────────────────────────────
+    rental_income_1 = _get_nested(view, "tax_data.income_rental")
+    rental_income_2 = _get_nested(view, "tax_data_2.income_rental")
+    try:
+        has_rental_income = (
+            (rental_income_1 and float(rental_income_1) > 0)
+            or (rental_income_2 and float(rental_income_2) > 0)
+        )
+    except (ValueError, TypeError):
+        has_rental_income = False
+    if has_rental_income and not _find_value(view, "monthly_rental_income"):
+        warnings.append(
+            "Mieteinnahmen im Steuerbescheid erkannt – bitte monatliche Mieteinnahmen eintragen"
+        )
 
     # ──────────────────────────────────────────
     # 7. Manual Overrides prüfen

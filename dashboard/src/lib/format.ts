@@ -88,6 +88,7 @@ const FIELD_LABELS: Record<string, string> = {
   year_built: 'Baujahr',
   zinsbindung: 'Zinsbindung',
   wunschrate: 'Wunschrate',
+  monthly_rental_income: 'Mieteinnahmen (monatlich)',
   partnerId: 'Partner-ID',
   tippgeberPartnerId: 'Tippgeber Partner-ID',
   // Sonstige

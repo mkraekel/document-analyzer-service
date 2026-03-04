@@ -269,6 +269,7 @@ def build_europace_payload(case_id: str) -> dict:
                 "anzahlGehaelterProJahr": gv(
                     f"{p}salaries_per_year", f"{p_alt}_salaries_per_year"
                 ) or 12,
+                "monatlicheEinnahmenAusNebentaetigkeit": gv("monthly_rental_income") if id_suffix == "_1" else None,
             },
         }
 
