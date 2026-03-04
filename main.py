@@ -128,7 +128,8 @@ EXTRACTION_PROMPT = """Analysiere dieses Dokument und extrahiere alle relevanten
 Dokumenttyp erkennen aus: {doc_types}
 
 WICHTIGE KLASSIFIZIERUNGS-HINWEISE (MUSS beachtet werden):
-- Reisepass, Personalausweis, Aufenthaltstitel, Identitaetsdokument → "Ausweiskopie"
+- Reisepass, Personalausweis (Vorder- UND Rückseite!), Aufenthaltstitel, Identitaetsdokument → "Ausweiskopie"
+- Personalausweis-Rückseite erkennt man an: Anschrift/Adresse, Augenfarbe, Größe, Behörde/Authority, MRZ-Zeile (IDD<<...), Bundesdruckerei → IMMER "Ausweiskopie"!
 - Gehaltsabrechnung, Entgeltnachweis, Entgeltabrechnung, Lohnabrechnung, Lohnausweis, Verdienstbescheinigung, Brutto-Netto-Abrechnung, Bezuegemitteilung → "Gehaltsnachweis"
 - Renteninformation, Rentenauskunft, Deutsche Rentenversicherung, Renteninfo 20XX → "Renteninfo"
 - Grundbuchauszug, Grundbuchblatt, GB-Auszug, Amtsgericht Grundbuch → "Grundbuch"
@@ -160,9 +161,11 @@ WICHTIGE KLASSIFIZIERUNGS-HINWEISE (MUSS beachtet werden):
 
 Extrahiere je nach Dokumenttyp:
 
-Für Ausweise (inkl. Reisepass, Personalausweis):
+Für Ausweise (inkl. Reisepass, Personalausweis - Vorder- UND Rückseite):
 - Vorname, Nachname, Geburtsdatum, Geburtsort, Nationalität
 - Ausweisnummer, Gültig bis, Ausstellungsbehörde
+- Bei Rückseite: Anschrift (Strasse, Hausnummer, PLZ, Ort), Augenfarbe, Größe
+- MRZ-Zeile auslesen: Name und Ausweisnummer verifizieren
 
 Für Gehaltsnachweise (inkl. Entgeltnachweis, Gehaltsabrechnung):
 - Vorname, Nachname

@@ -564,13 +564,13 @@ export function CaseDetail() {
         <EditableDataGrid
           caseId={caseId!}
           data={{
-            purchase_price: flatFacts['property_data.purchase_price'] || flatFacts['purchase_price'] || '',
-            loan_amount: flatFacts['financing_data.loan_amount'] || flatFacts['loan_amount'] || '',
-            equity_to_use: flatFacts['financing_data.equity_to_use'] || flatFacts['equity_to_use'] || '',
-            object_type: flatFacts['property_data.object_type'] || flatFacts['object_type'] || '',
-            usage: flatFacts['property_data.usage'] || flatFacts['usage'] || '',
+            purchase_price: findValue(effectiveView, 'purchase_price', 'property_data.purchase_price') || '',
+            loan_amount: findValue(effectiveView, 'loan_amount', 'financing_data.loan_amount') || '',
+            equity_to_use: findValue(effectiveView, 'equity_to_use', 'financing_data.equity_to_use') || '',
+            object_type: findValue(effectiveView, 'object_type', 'property_data.object_type') || '',
+            usage: findValue(effectiveView, 'usage', 'property_data.usage') || '',
           }}
-          target="facts"
+          target="overrides"
           onSaved={refetch}
           addToast={addToast}
         />
