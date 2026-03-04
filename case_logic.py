@@ -71,9 +71,11 @@ def gatekeeper(from_email: str, subject: str, conversation_id: str = None) -> di
                 return {"pass": False, "reason": "internal_non_finance", "actor": None, "is_internal_reply": False}
             return {"pass": True, "reason": None, "actor": "broker", "is_internal_reply": True}
 
-        # Neue interne Mail mit Finanz-Keyword → Broker leitet Anfrage weiter
+        # Neue interne Mail mit Finanz-Keyword aber KEIN Forward/Reply
+        # → wahrscheinlich ausgehende Mail an Bankpartner/Geschäftskontakt
+        # → Triage statt automatisch Case erstellen
         if has_finance:
-            return {"pass": True, "reason": None, "actor": "broker", "is_internal_reply": False}
+            return {"pass": True, "reason": "internal_new_finance", "actor": "broker", "is_internal_reply": False, "force_triage": True}
         return {"pass": False, "reason": "outgoing_system_mail", "actor": None, "is_internal_reply": False}
 
     # Externe Allowlist

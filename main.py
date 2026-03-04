@@ -2269,7 +2269,14 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
     is_new = match["action"] == "create"
     needs_folder = False
 
-    # 4b. Kein Case erstellen ohne Antragstellername → Triage
+    # 4b. Interne neue Mails (kein FWD/Reply) → Triage statt Case
+    if gate.get("force_triage") and match["action"] == "create":
+        logger.info(f"Internal new finance mail → triage (not a forwarded request): {request.subject}")
+        db.log_processed_email(request.provider_message_id, parsed.get("mail_type", "new_request"), "triage",
+                               parsed_result=parsed, matched_by="internal_new_finance", **_log_kwargs)
+        return {"action": "triage", "reason": "internal_new_finance"}
+
+    # 4c. Kein Case erstellen ohne Antragstellername → Triage
     if match["action"] == "create" and not applicant_name:
         logger.info(f"No applicant name found, redirecting to triage: {request.subject}")
         db.log_processed_email(request.provider_message_id, parsed.get("mail_type", "new_request"), "triage",
