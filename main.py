@@ -2750,11 +2750,32 @@ def _map_extracted_to_facts(doc_type: str, extracted: dict,
             "employment_type": "Angestellter",
         }
         # Also write to applicant_data so KEY_SEARCH_PATHS can find it
-        facts[f"applicant_data{suffix}"] = {
+        _vorname = extracted.get("Vorname")
+        _nachname = extracted.get("Nachname")
+        ad = {
             "employer": _arbeitgeber,
             "net_income": _netto,
             "employment_type": "Angestellter",
         }
+        if _vorname:
+            ad["first_name"] = _vorname
+            ad["vorname"] = _vorname
+        if _nachname:
+            ad["last_name"] = _nachname
+            ad["nachname"] = _nachname
+        facts[f"applicant_data{suffix}"] = ad
+        # Wohnadresse aus Gehaltsnachweis (nur Hauptantragsteller)
+        _street = extracted.get("Strasse") or extracted.get("Straße")
+        _hnr = extracted.get("Hausnummer")
+        _plz = extracted.get("PLZ")
+        _city = extracted.get("Ort") or extracted.get("Stadt")
+        if not suffix and (_street or _plz or _city):
+            facts["address_data"] = {
+                "street": _street,
+                "house_number": _hnr,
+                "zip": _plz,
+                "city": _city,
+            }
 
     elif doc_type in ("Kontoauszug",):
         # Kontoauszug is shared / not person-specific
