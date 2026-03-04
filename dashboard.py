@@ -230,6 +230,7 @@ async def dashboard_case_detail(case_id: str):
                 "processed_at": e.get("processed_at"),
                 "matched_by": e.get("matched_by", ""),
                 "body_text": e.get("body_text", ""),
+                "body_html": e.get("body_html", ""),
                 "parsed_result": parsed,
             })
 

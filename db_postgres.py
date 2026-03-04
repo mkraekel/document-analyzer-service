@@ -136,6 +136,7 @@ CREATE TABLE IF NOT EXISTS processed_emails (
     subject TEXT DEFAULT '',
     conversation_id TEXT DEFAULT '',
     body_text TEXT DEFAULT '',
+    body_html TEXT DEFAULT '',
     parsed_result JSONB DEFAULT '{}'::jsonb,
     matched_by TEXT DEFAULT '',
     processed_at TEXT DEFAULT '',
@@ -163,6 +164,7 @@ ALTER TABLE fin_cases ADD COLUMN IF NOT EXISTS europace_case_id TEXT DEFAULT '';
 ALTER TABLE fin_cases ADD COLUMN IF NOT EXISTS europace_response JSONB DEFAULT '{}'::jsonb;
 ALTER TABLE fin_cases ADD COLUMN IF NOT EXISTS final_payload_preview TEXT DEFAULT '';
 ALTER TABLE fin_documents ADD COLUMN IF NOT EXISTS gdrive_file_id TEXT DEFAULT '';
+ALTER TABLE processed_emails ADD COLUMN IF NOT EXISTS body_html TEXT DEFAULT '';
 """
 
 
@@ -431,6 +433,7 @@ def log_processed_email(
     attachments_count: int = 0,
     attachments_hashes: list = None,
     body_text: str = None,
+    body_html: str = None,
     parsed_result: dict = None,
     matched_by: str = None,
 ):
@@ -443,15 +446,16 @@ def log_processed_email(
                 cur.execute("""
                     INSERT INTO processed_emails
                         (_id, provider_message_id, mail_type, processing_result, case_id,
-                         from_email, subject, conversation_id, body_text,
+                         from_email, subject, conversation_id, body_text, body_html,
                          parsed_result, matched_by, processed_at,
                          attachments_count, attachments_hashes)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (provider_message_id) DO UPDATE SET
                         mail_type = EXCLUDED.mail_type,
                         processing_result = EXCLUDED.processing_result,
                         case_id = EXCLUDED.case_id,
                         body_text = EXCLUDED.body_text,
+                        body_html = EXCLUDED.body_html,
                         parsed_result = EXCLUDED.parsed_result,
                         matched_by = EXCLUDED.matched_by,
                         processed_at = EXCLUDED.processed_at
@@ -459,6 +463,7 @@ def log_processed_email(
                     _new_id(), provider_message_id, intent, action,
                     case_id or "", from_email or "", subject or "",
                     conversation_id or "", (body_text or "")[:5000],
+                    (body_html or "")[:50000],
                     psycopg2.extras.Json(parsed_result or {}),
                     matched_by or "", now,
                     attachments_count or 0, psycopg2.extras.Json(json.loads(hashes)),

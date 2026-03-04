@@ -740,9 +740,24 @@ export function CaseDetail() {
                     </span>
                   </summary>
                   <div className="px-3 pb-3 border-t border-gray-200">
-                    <div className="mt-2 text-sm text-gray-700 bg-white rounded-lg p-3 max-h-96 overflow-y-auto whitespace-pre-wrap">
-                      {email.body_text || '(Kein Text)'}
-                    </div>
+                    {email.body_html ? (
+                      <iframe
+                        srcDoc={email.body_html}
+                        sandbox=""
+                        className="mt-2 w-full bg-white rounded-lg border border-gray-200"
+                        style={{ minHeight: '200px', maxHeight: '500px' }}
+                        onLoad={(e) => {
+                          const f = e.currentTarget
+                          if (f.contentDocument?.body) {
+                            f.style.height = Math.min(f.contentDocument.body.scrollHeight + 20, 500) + 'px'
+                          }
+                        }}
+                      />
+                    ) : (
+                      <div className="mt-2 text-sm text-gray-700 bg-white rounded-lg p-3 max-h-96 overflow-y-auto whitespace-pre-wrap">
+                        {email.body_text || '(Kein Text)'}
+                      </div>
+                    )}
                     {Object.keys(parsed).length > 0 && (
                       <details className="mt-2">
                         <summary className="text-xs font-medium text-gray-500 cursor-pointer hover:text-gray-700">

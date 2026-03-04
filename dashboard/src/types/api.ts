@@ -53,6 +53,7 @@ export interface CaseEmail {
   processed_at: string
   matched_by: string
   body_text: string
+  body_html?: string
   parsed_result: Record<string, unknown>
 }
 

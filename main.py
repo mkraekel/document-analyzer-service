@@ -2107,6 +2107,7 @@ def _process_email_impl(request: ProcessEmailRequest):
     gate = cases.gatekeeper(request.from_email, request.subject, request.conversation_id)
     _att_filenames = list((request.attachments or {}).keys())
     _body_short = (request.body_text or "")[:5000]
+    _body_html_short = (request.body_html or "")[:50000]
     _log_kwargs = dict(
         from_email=request.from_email,
         subject=request.subject,
@@ -2114,6 +2115,7 @@ def _process_email_impl(request: ProcessEmailRequest):
         attachments_count=len(_att_filenames),
         attachments_hashes=_att_filenames,
         body_text=_body_short,
+        body_html=_body_html_short,
     )
     if not gate["pass"]:
         # Nicht loggen – diese Mails sind irrelevant (Newsletter, System, nicht-allowlisted)
