@@ -168,6 +168,7 @@ Für Gehaltsnachweise (inkl. Entgeltnachweis, Gehaltsabrechnung):
 
 Für Kontoauszüge:
 - Bank, IBAN, Kontostand, Zeitraum
+- months_covered (Anzahl der abgedeckten Monate als Zahl, z.B. 1 wenn nur ein Monat, 3 wenn Quartal/3 Monate enthalten)
 - Regelmäßige Eingänge/Ausgänge
 
 Für Selbstauskunft:

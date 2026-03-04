@@ -486,6 +486,25 @@ def check_readiness(case_id: str) -> dict:
         check_doc(doc_type, req)
 
     # ──────────────────────────────────────────
+    # 6b. Kontoauszüge als Eigenkapitalnachweis werten
+    # ──────────────────────────────────────────
+    ek_missing = any(d["type"] == "Eigenkapitalnachweis" for d in missing_docs)
+    if ek_missing:
+        kontoauszug_docs = _count_docs_with_aliases(docs_index, "Kontoauszug")
+        # Effektive Monate zählen: ein Dokument kann mehrere Monate abdecken
+        effective_months = 0
+        for doc in kontoauszug_docs:
+            ext = doc.get("extracted") or {}
+            months = ext.get("months_covered")
+            if months and isinstance(months, (int, float)) and months > 0:
+                effective_months += int(months)
+            else:
+                effective_months += 1  # Default: 1 Monat pro Dokument
+        if effective_months >= 3:
+            missing_docs = [d for d in missing_docs if d["type"] != "Eigenkapitalnachweis"]
+            logger.info(f"[{case_id}] Eigenkapitalnachweis durch {len(kontoauszug_docs)} Kontoauszüge ({effective_months} Monate) abgedeckt")
+
+    # ──────────────────────────────────────────
     # 7. Manual Overrides prüfen
     # ──────────────────────────────────────────
     approve_import = bool(overrides.get("APPROVE_IMPORT"))
