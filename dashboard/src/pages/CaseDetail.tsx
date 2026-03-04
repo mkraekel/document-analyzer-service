@@ -396,6 +396,35 @@ export function CaseDetail() {
         </div>
       </div>
 
+      {/* Investagon Banner */}
+      {(c.investagon_links || []).length > 0 && (
+        <div className="bg-amber-50 border border-amber-300 rounded-xl px-4 py-3 mb-4 shadow-sm">
+          <div className="flex items-start gap-3">
+            <span className="text-amber-600 text-lg mt-0.5">&#9888;</span>
+            <div className="flex-1">
+              <h3 className="text-sm font-semibold text-amber-900">Manuelle Aktion erforderlich</h3>
+              <p className="text-sm text-amber-800 mt-1">
+                Investagon-Links gefunden — Daten manuell abrufen und unten in die Felder eintragen:
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {c.investagon_links.map((link, i) => (
+                  <a
+                    key={i}
+                    href={link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 px-3 py-1.5 text-sm font-medium bg-amber-100 text-amber-900 rounded-lg hover:bg-amber-200 transition-colors"
+                  >
+                    <ExternalLink size={14} />
+                    Investagon{c.investagon_links.length > 1 ? ` (${i + 1})` : ''} öffnen
+                  </a>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Readiness Checklist */}
       <Section
         title="Readiness Check"

@@ -73,6 +73,7 @@ export interface CaseDetail {
   onedrive_folder_id: string
   onedrive_web_url: string
   google_drive_links: string[]
+  investagon_links: string[]
   last_status_change: string
   europace_case_id: string
   europace_response: Record<string, unknown>

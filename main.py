@@ -2181,8 +2181,9 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
 
     # 3b. Google Drive Links per Regex extrahieren (zuverlässiger als GPT)
     import re as _re
+    _email_body_combined = (request.body_text or "") + " " + (request.body_html or "")
     _gdrive_pattern = r'https?://drive\.google\.com/(?:drive/folders|file/d|open\?id=)[^\s<>"\')\]]+'
-    _gdrive_matches = _re.findall(_gdrive_pattern, (request.body_text or "") + " " + (request.body_html or ""))
+    _gdrive_matches = _re.findall(_gdrive_pattern, _email_body_combined)
     if _gdrive_matches:
         # Deduplizieren
         _seen = set()
@@ -2194,6 +2195,20 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
                 _unique_links.append(clean)
         parsed["google_drive_links"] = _unique_links
         logger.info(f"Google Drive links found in email: {len(_unique_links)}")
+
+    # 3c. Investagon Links erkennen (manuelle Aktion erforderlich)
+    _investagon_pattern = r'https?://[^\s<>"\')\]]*investagon\.[^\s<>"\')\]]+'
+    _investagon_matches = _re.findall(_investagon_pattern, _email_body_combined)
+    if _investagon_matches:
+        _seen_inv = set()
+        _unique_inv = []
+        for link in _investagon_matches:
+            clean = link.rstrip(".,;:)")
+            if clean not in _seen_inv:
+                _seen_inv.add(clean)
+                _unique_inv.append(clean)
+        parsed["investagon_links"] = _unique_inv
+        logger.info(f"Investagon links found in email: {len(_unique_inv)}")
 
     # Relevanz prüfen
     is_broker = gate["is_internal_reply"]

@@ -234,8 +234,9 @@ async def dashboard_case_detail(case_id: str):
                 "parsed_result": parsed,
             })
 
-        # Google Drive Links aus E-Mails sammeln (unique)
+        # Google Drive + Investagon Links aus E-Mails sammeln (unique)
         gdrive_links_set = set()
+        investagon_links_set = set()
         for e in emails:
             parsed_e = e.get("parsed_result") or {}
             if isinstance(parsed_e, str):
@@ -246,7 +247,11 @@ async def dashboard_case_detail(case_id: str):
             for link in parsed_e.get("google_drive_links", []):
                 if link:
                     gdrive_links_set.add(link)
+            for link in parsed_e.get("investagon_links", []):
+                if link:
+                    investagon_links_set.add(link)
         gdrive_links_list = sorted(gdrive_links_set)
+        investagon_links_list = sorted(investagon_links_set)
 
         # Europace-Felder
         europace_response = case.get("_europace_response", {})
@@ -259,6 +264,7 @@ async def dashboard_case_detail(case_id: str):
             "onedrive_folder_id": case.get("onedrive_folder_id", ""),
             "onedrive_web_url": case.get("onedrive_web_url", ""),
             "google_drive_links": gdrive_links_list,
+            "investagon_links": investagon_links_list,
             "last_status_change": case.get("last_status_change"),
             "europace_case_id": case.get("europace_case_id", ""),
             "europace_response": europace_response,
