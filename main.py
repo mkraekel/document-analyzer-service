@@ -33,6 +33,8 @@ except Exception as e:
 
 from pypdf import PdfReader
 import fitz  # PyMuPDF - PDF to image for scanned docs
+from PIL import Image, ImageOps
+from io import BytesIO
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
@@ -367,11 +369,32 @@ def _filename_fallback_doc_type(filename: str) -> Optional[str]:
     return None
 
 
+def _fix_image_orientation(file_bytes: bytes, mime_type: str) -> tuple[bytes, str]:
+    """EXIF-Auto-Rotation für Kamerafotos. Gibt korrigierte Bytes + MIME zurück."""
+    if not mime_type.startswith("image/"):
+        return file_bytes, mime_type
+    try:
+        img = Image.open(BytesIO(file_bytes))
+        rotated = ImageOps.exif_transpose(img)
+        if rotated is not img:
+            buf = BytesIO()
+            fmt = "JPEG" if mime_type in ("image/jpeg", "image/jpg") else "PNG"
+            rotated.save(buf, format=fmt)
+            logger.info(f"EXIF-Rotation angewendet ({mime_type})")
+            return buf.getvalue(), mime_type
+    except Exception as e:
+        logger.debug(f"EXIF-Rotation nicht möglich: {e}")
+    return file_bytes, mime_type
+
+
 def analyze_with_gpt4o(file_bytes: bytes, mime_type: str, filename: str) -> dict:
     """Analysiert Dokument mit GPT-4o Vision"""
 
     if not client:
         raise HTTPException(status_code=500, detail="OpenAI API Key nicht konfiguriert")
+
+    # EXIF-Auto-Rotation für Kamerafotos (Personalausweis etc.)
+    file_bytes, mime_type = _fix_image_orientation(file_bytes, mime_type)
 
     base64_data = base64.standard_b64encode(file_bytes).decode("utf-8")
 
