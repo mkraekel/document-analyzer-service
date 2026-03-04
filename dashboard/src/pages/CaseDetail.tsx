@@ -305,17 +305,31 @@ export function CaseDetail() {
               </span>
               {c.partner_email && <span>{c.partner_email}</span>}
             </div>
-            {c.onedrive_web_url && (
-              <a
-                href={c.onedrive_web_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800 mt-2"
-              >
-                <ExternalLink size={14} />
-                OneDrive Ordner
-              </a>
-            )}
+            <div className="flex flex-wrap gap-3 mt-2">
+              {c.onedrive_web_url && (
+                <a
+                  href={c.onedrive_web_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800"
+                >
+                  <ExternalLink size={14} />
+                  OneDrive Ordner
+                </a>
+              )}
+              {(c.google_drive_links || []).map((link, i) => (
+                <a
+                  key={i}
+                  href={link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-sm text-green-600 hover:text-green-800"
+                >
+                  <ExternalLink size={14} />
+                  Google Drive{(c.google_drive_links || []).length > 1 ? ` (${i + 1})` : ''}
+                </a>
+              ))}
+            </div>
           </div>
 
           {/* Quick Actions */}
@@ -650,9 +664,20 @@ export function CaseDetail() {
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleDocs.map((doc, i) => (
+                  {visibleDocs.map((doc, i) => {
+                    const displayName = doc.file_name?.startsWith('gdrive:') ? doc.file_name.slice(7) : doc.file_name
+                    return (
                     <tr key={i} className="border-b border-gray-100 hover:bg-gray-50">
-                      <td className="py-2 px-3 text-gray-900 truncate max-w-[200px]">{doc.file_name}</td>
+                      <td className="py-2 px-3 text-gray-900 truncate max-w-[200px]">
+                        <span className="flex items-center gap-1.5">
+                          {displayName}
+                          {doc.gdrive_url && (
+                            <a href={doc.gdrive_url} target="_blank" rel="noopener noreferrer" title="In Google Drive öffnen" className="text-blue-500 hover:text-blue-700 flex-shrink-0">
+                              <ExternalLink size={13} />
+                            </a>
+                          )}
+                        </span>
+                      </td>
                       <td className="py-2 px-3 text-gray-600">{doc.doc_type || '-'}</td>
                       <td className="py-2 px-3">
                         <span className={`text-xs px-2 py-0.5 rounded-full ${
@@ -667,7 +692,7 @@ export function CaseDetail() {
                         {formatTime(doc.processed_at)}
                       </td>
                     </tr>
-                  ))}
+                  )})}
                 </tbody>
               </table>
             </div>

@@ -41,6 +41,8 @@ export interface CaseDocument {
   processing_status: string
   processed_at: string
   extracted_fields: string[]
+  gdrive_file_id?: string
+  gdrive_url?: string
 }
 
 export interface CaseEmail {
@@ -69,6 +71,7 @@ export interface CaseDetail {
   status: string
   onedrive_folder_id: string
   onedrive_web_url: string
+  google_drive_links: string[]
   last_status_change: string
   europace_case_id: string
   europace_response: Record<string, unknown>

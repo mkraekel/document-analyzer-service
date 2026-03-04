@@ -343,7 +343,8 @@ def process_google_drive_links(
             # Collect for batch insert
             doc_rows.append({
                 "caseId": case_id,
-                "file_name": f"gdrive:{fname}",
+                "file_name": fname,
+                "gdrive_file_id": fid,
                 "doc_type": result.get("doc_type", "Sonstiges"),
                 "extracted_data": json.dumps(extracted),
                 "processing_status": "completed",
@@ -393,17 +394,33 @@ def process_google_drive_links(
     if doc_rows:
         try:
             existing_docs = db.search_rows("fin_documents", "caseId", case_id)
-            existing_by_name = {d.get("file_name"): d for d in existing_docs}
+            existing_by_name = {}
+            existing_by_gdrive_id = {}
+            for d in existing_docs:
+                fn = d.get("file_name", "")
+                # Index by name (also match legacy "gdrive:" prefix)
+                existing_by_name[fn] = d
+                if fn.startswith("gdrive:"):
+                    existing_by_name[fn[7:]] = d  # map clean name → same doc
+                gid = d.get("gdrive_file_id", "")
+                if gid:
+                    existing_by_gdrive_id[gid] = d
             rows_to_insert = []
             for row in doc_rows:
                 fname = row.get("file_name")
-                if fname in existing_by_name:
-                    db.update_row("fin_documents", existing_by_name[fname]["_id"], {
+                gid = row.get("gdrive_file_id", "")
+                # Match by gdrive_file_id first, then by filename
+                existing = existing_by_gdrive_id.get(gid) or existing_by_name.get(fname)
+                if existing:
+                    update_data = {
+                        "file_name": fname,  # normalize away "gdrive:" prefix
+                        "gdrive_file_id": gid,
                         "doc_type": row["doc_type"],
                         "extracted_data": row["extracted_data"],
                         "processing_status": row["processing_status"],
                         "processed_at": row["processed_at"],
-                    })
+                    }
+                    db.update_row("fin_documents", existing["_id"], update_data)
                 else:
                     rows_to_insert.append(row)
             if rows_to_insert:

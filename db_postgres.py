@@ -120,6 +120,7 @@ CREATE TABLE IF NOT EXISTS fin_documents (
     processing_status TEXT DEFAULT 'pending',
     error_message TEXT DEFAULT '',
     onedrive_file_id TEXT DEFAULT '',
+    gdrive_file_id TEXT DEFAULT '',
     processed_at TEXT DEFAULT '',
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -161,6 +162,7 @@ ALTER TABLE fin_cases ADD COLUMN IF NOT EXISTS onedrive_web_url TEXT DEFAULT '';
 ALTER TABLE fin_cases ADD COLUMN IF NOT EXISTS europace_case_id TEXT DEFAULT '';
 ALTER TABLE fin_cases ADD COLUMN IF NOT EXISTS europace_response JSONB DEFAULT '{}'::jsonb;
 ALTER TABLE fin_cases ADD COLUMN IF NOT EXISTS final_payload_preview TEXT DEFAULT '';
+ALTER TABLE fin_documents ADD COLUMN IF NOT EXISTS gdrive_file_id TEXT DEFAULT '';
 """
 
 

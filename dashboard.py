@@ -199,12 +199,19 @@ async def dashboard_case_detail(case_id: str):
                     extracted = json.loads(extracted)
                 except Exception:
                     extracted = {}
+            file_name = d.get("file_name", "")
+            # Strip legacy "gdrive:" prefix for clean display
+            if file_name.startswith("gdrive:"):
+                file_name = file_name[7:]
+            gdrive_id = d.get("gdrive_file_id", "")
             doc_list.append({
-                "file_name": d.get("file_name"),
+                "file_name": file_name,
                 "doc_type": d.get("doc_type"),
                 "processing_status": d.get("processing_status"),
                 "processed_at": d.get("processed_at"),
                 "extracted_fields": list(extracted.keys()) if extracted else [],
+                "gdrive_file_id": gdrive_id,
+                "gdrive_url": f"https://drive.google.com/file/d/{gdrive_id}/view" if gdrive_id else "",
             })
 
         email_list = []
@@ -226,6 +233,20 @@ async def dashboard_case_detail(case_id: str):
                 "parsed_result": parsed,
             })
 
+        # Google Drive Links aus E-Mails sammeln (unique)
+        gdrive_links_set = set()
+        for e in emails:
+            parsed_e = e.get("parsed_result") or {}
+            if isinstance(parsed_e, str):
+                try:
+                    parsed_e = json.loads(parsed_e)
+                except Exception:
+                    parsed_e = {}
+            for link in parsed_e.get("google_drive_links", []):
+                if link:
+                    gdrive_links_set.add(link)
+        gdrive_links_list = sorted(gdrive_links_set)
+
         # Europace-Felder
         europace_response = case.get("_europace_response", {})
 
@@ -236,6 +257,7 @@ async def dashboard_case_detail(case_id: str):
             "status": case.get("status"),
             "onedrive_folder_id": case.get("onedrive_folder_id", ""),
             "onedrive_web_url": case.get("onedrive_web_url", ""),
+            "google_drive_links": gdrive_links_list,
             "last_status_change": case.get("last_status_change"),
             "europace_case_id": case.get("europace_case_id", ""),
             "europace_response": europace_response,
@@ -743,7 +765,11 @@ async def _do_reanalyze(case_id: str):
 
 
 async def _run_scan_background(case_id: str, folder_id: str, force: bool):
-    """n8n OneDrive-Scan im Hintergrund – blockiert kein Frontend."""
+    """n8n OneDrive-Scan + Google Drive Check im Hintergrund."""
+    import asyncio
+    scanned = 0
+
+    # 1. OneDrive Scan
     try:
         async with httpx.AsyncClient(timeout=300) as client:
             resp = await client.post(N8N_SCAN_WEBHOOK, json={
@@ -754,12 +780,40 @@ async def _run_scan_background(case_id: str, folder_id: str, force: bool):
             resp.raise_for_status()
             result = resp.json()
         scanned = result.get("scanned", 0)
-        logger.info(f"Scan background done for {case_id}: {scanned} scanned")
+        logger.info(f"Scan background OneDrive done for {case_id}: {scanned} scanned")
+    except Exception as e:
+        logger.error(f"Scan background OneDrive failed for {case_id}: {e}")
+
+    # 2. Google Drive – check if case has GDrive links and process any new files
+    try:
+        emails = db.search_rows("processed_emails", "case_id", case_id)
+        gdrive_links = []
+        for email in emails:
+            parsed = email.get("parsed_result") or {}
+            if isinstance(parsed, str):
+                try:
+                    parsed = json.loads(parsed)
+                except Exception:
+                    parsed = {}
+            gdrive_links.extend(parsed.get("google_drive_links", []))
+        if gdrive_links:
+            import gdrive
+            gdrive_result = await asyncio.to_thread(
+                gdrive.process_google_drive_links, case_id=case_id, links=gdrive_links
+            )
+            gdrive_processed = gdrive_result.get("files_processed", 0)
+            scanned += gdrive_processed
+            logger.info(f"Scan background GDrive done for {case_id}: {gdrive_processed} processed")
+    except Exception as e:
+        logger.error(f"Scan background GDrive failed for {case_id}: {e}")
+
+    # 3. Readiness + Notifications
+    try:
         readiness_result = rdns.check_readiness(case_id)
         if scanned > 0:
             notify.dispatch_notifications(case_id, readiness_result, force=True)
     except Exception as e:
-        logger.error(f"Scan background failed for {case_id}: {e}")
+        logger.error(f"Readiness after scan failed for {case_id}: {e}")
 
 
 async def _run_gdrive_background(case_id: str, links: list):
