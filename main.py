@@ -2387,10 +2387,12 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
 
                 # Facts sammeln (einmal am Ende mergen)
                 _person = (result.get("meta") or {}).get("person_name")
+                _is_couple = _detect_is_couple(applicant_name, all_new_facts)
                 new_facts = _map_extracted_to_facts(
                     result.get("doc_type", ""), extracted,
                     person_name=_person,
                     case_applicant_name=applicant_name,
+                    is_couple=_is_couple,
                 )
                 if new_facts:
                     all_new_facts = cases.merge_facts(all_new_facts, new_facts)
@@ -2621,10 +2623,13 @@ async def _process_document_background(
             _person = (result.get("meta") or {}).get("person_name")
             _case = cases.load_case(case_id)
             _case_name = _case.get("applicant_name") if _case else None
+            _existing_facts = _case.get("_facts_extracted", {}) if _case else {}
+            _is_couple = _detect_is_couple(_case_name, _existing_facts)
             new_facts = _map_extracted_to_facts(
                 doc_type, extracted,
                 person_name=_person,
                 case_applicant_name=_case_name,
+                is_couple=_is_couple,
             )
             if new_facts:
                 cases.save_facts(case_id, new_facts, source=f"document:{doc_type}")
@@ -2646,6 +2651,20 @@ async def _process_document_background(
                       finished_at=datetime.utcnow().isoformat())
         _queue_cleanup(case_id)
         logger.info(f"[{case_id}] Done processing {filename} → {result.get('doc_type', '?')}")
+
+
+def _detect_is_couple(applicant_name: str, facts: dict) -> bool:
+    """Erkennt ob es sich um ein Paar handelt (zwei Antragsteller)."""
+    # 1. "und" / "&" im Case-Namen → Paar
+    if applicant_name:
+        name_lower = applicant_name.lower()
+        if " und " in name_lower or " & " in name_lower:
+            return True
+    # 2. Bereits applicant_data_2 mit Vorname/Nachname in Facts → Paar
+    ad2 = facts.get("applicant_data_2", {})
+    if isinstance(ad2, dict) and (ad2.get("first_name") or ad2.get("vorname")):
+        return True
+    return False
 
 
 def _clean_person_name(name: str) -> str:
@@ -2721,20 +2740,30 @@ def _maybe_update_applicant_name(case_id: str, person_name: str):
 
 def _map_extracted_to_facts(doc_type: str, extracted: dict,
                              person_name: str = None,
-                             case_applicant_name: str = None) -> dict:
+                             case_applicant_name: str = None,
+                             is_couple: bool = False) -> dict:
     """
     Mappt extrahierte Dokument-Daten auf facts_extracted Struktur.
 
     person_name: Name der Person im Dokument (aus meta.person_name)
     case_applicant_name: Name des Hauptantragstellers aus dem Case
+    is_couple: True wenn bekannt ist, dass es einen zweiten Antragsteller gibt
 
     Bei Paaren: Wenn person_name nicht zum case_applicant_name passt,
     werden die Daten unter _2-Keys gespeichert (applicant_data_2, income_data_2, etc.)
+    Bei Einzel-Antragstellern: Immer Primary (verhindert _2 durch OCR-Fehler).
     """
     facts = {}
 
     # Determine person suffix for person-specific doc types
     is_primary = _is_primary_applicant(person_name, case_applicant_name)
+    if not is_primary and not is_couple:
+        # Kein Paar bekannt → Name-Mismatch ist wahrscheinlich ein OCR-/Extraktionsfehler
+        logger.warning(
+            f"Name mismatch '{person_name}' vs '{case_applicant_name}' "
+            f"aber kein Paar erkannt → behandle als Primary"
+        )
+        is_primary = True
     suffix = "" if is_primary else "_2"
 
     if doc_type in ("Ausweiskopie",):
