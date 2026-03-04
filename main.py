@@ -262,6 +262,8 @@ Für Energieausweis:
 - Energiekennwert (kWh/m²a), Energieeffizienzklasse
 - Heizungsart, Baujahr (des Gebäudes)
 
+WICHTIG: Verwende null für fehlende/unbekannte Werte. NIEMALS "N/A", "n/a", "nicht verfügbar", "unbekannt" oder "-" als Wert verwenden!
+
 Antworte NUR mit validem JSON in diesem Format:
 {{
   "doc_type": "erkannter Typ (MUSS einer der vorgegebenen Typen sein!)",

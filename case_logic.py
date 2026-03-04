@@ -223,17 +223,29 @@ def update_case_conversation(case_id: str, conversation_id: str):
         })
 
 
+_JUNK_VALUES = {"N/A", "n/a", "N.A.", "n.a.", "nicht verfügbar", "unbekannt", "-", "–", "k.A.", "k. A."}
+
+
+def _is_junk(val) -> bool:
+    """Prüft ob ein Wert ein Platzhalter/Junk ist der wie null behandelt werden soll."""
+    return isinstance(val, str) and val.strip() in _JUNK_VALUES
+
+
 def merge_facts(existing: dict, new_facts: dict) -> dict:
     """
     Deep Merge: Bestehende Werte bleiben, neue füllen nur leere Slots.
     Für Objekte wird rekursiv gemergt.
+    Junk-Werte (N/A, -, etc.) werden wie null behandelt.
     """
     result = dict(existing)
     for key, val in new_facts.items():
-        if key not in result or result[key] is None or result[key] == "":
+        if _is_junk(val):
+            continue  # Junk-Werte nicht übernehmen
+        existing_val = result.get(key)
+        if existing_val is None or existing_val == "" or _is_junk(existing_val):
             result[key] = val
-        elif isinstance(val, dict) and isinstance(result.get(key), dict):
-            result[key] = merge_facts(result[key], val)
+        elif isinstance(val, dict) and isinstance(existing_val, dict):
+            result[key] = merge_facts(existing_val, val)
     return result
 
 
