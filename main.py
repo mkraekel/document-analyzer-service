@@ -384,28 +384,31 @@ def analyze_with_gpt4o(file_bytes: bytes, mime_type: str, filename: str) -> dict
     # Prompt bauen
     prompt = EXTRACTION_PROMPT.format(doc_types=", ".join(DOC_TYPES))
 
+    # System-Prompt separat für OpenAI Prompt Caching (statischer Prefix → 50% Input-Rabatt)
+    system_msg = {"role": "system", "content": prompt}
+
     # PDFs: Immer Text-basiert analysieren (Vision API akzeptiert keine PDFs)
     if mime_type == "application/pdf":
         if extracted_text:
             logger.info(f"PDF mit Text: {len(extracted_text)} Zeichen")
-            messages = [{
-                "role": "user",
-                "content": f"{prompt}\n\nDokument: {filename}\n\nExtrahierter Text:\n{extracted_text[:15000]}"
-            }]
+            messages = [
+                system_msg,
+                {"role": "user", "content": f"Dokument: {filename}\n\nExtrahierter Text:\n{extracted_text[:15000]}"},
+            ]
             model = "gpt-4o-mini"  # Günstiger für Text-Only
         else:
             # PDF ohne Text (gescannt) → als Bild rendern und Vision API nutzen
             page_images = pdf_pages_to_images(file_bytes, max_pages=2)
             if page_images:
                 logger.info(f"Scan-PDF {filename}: {len(page_images)} Seiten als Bilder gerendert → Vision API")
-                content = [{"type": "text", "text": f"{prompt}\n\nDokument: {filename}"}]
+                content = [{"type": "text", "text": f"Dokument: {filename}"}]
                 for img_bytes_page, img_mime in page_images:
                     b64 = base64.standard_b64encode(img_bytes_page).decode("utf-8")
                     content.append({
                         "type": "image_url",
                         "image_url": {"url": f"data:{img_mime};base64,{b64}", "detail": "high"}
                     })
-                messages = [{"role": "user", "content": content}]
+                messages = [system_msg, {"role": "user", "content": content}]
                 model = "gpt-4o"
             else:
                 # Konvertierung fehlgeschlagen - Filename-Fallback
@@ -421,7 +424,7 @@ def analyze_with_gpt4o(file_bytes: bytes, mime_type: str, filename: str) -> dict
         # Bilder: Vision-Analyse
         logger.info(f"Nutze Vision-Analyse für Bild: {filename}")
         content = [
-            {"type": "text", "text": f"{prompt}\n\nDokument: {filename}"},
+            {"type": "text", "text": f"Dokument: {filename}"},
             {
                 "type": "image_url",
                 "image_url": {
@@ -430,7 +433,7 @@ def analyze_with_gpt4o(file_bytes: bytes, mime_type: str, filename: str) -> dict
                 }
             }
         ]
-        messages = [{"role": "user", "content": content}]
+        messages = [system_msg, {"role": "user", "content": content}]
         model = "gpt-4o"
 
     # API Call
@@ -1109,13 +1112,7 @@ async def build_europace_payload(request: EuropaceRequest):
 # EMAIL PARSER ENDPOINT
 # ============================================
 
-EMAIL_PARSE_PROMPT = """Analysiere diese E-Mail und extrahiere strukturierte Daten.
-
-E-Mail:
-Von: {from_address} ({from_name})
-Betreff: {subject}
-Text:
-{body}
+EMAIL_PARSE_SYSTEM_PROMPT = """Analysiere E-Mails und extrahiere strukturierte Daten.
 
 Aufgaben:
 1. Erkenne den Intent (Absicht) der E-Mail
@@ -1123,7 +1120,7 @@ Aufgaben:
 3. Erkenne ob es eine Antwort auf eine bestehende Anfrage ist
 
 Antworte NUR mit validem JSON:
-{{
+{
   "intent": "new_request|document_upload|question_answer|followup|status_inquiry|unknown",
   "confidence": 0.0-1.0,
   "is_reply": true|false,
@@ -1131,15 +1128,15 @@ Antworte NUR mit validem JSON:
   "language": "de|en",
   "urgency": "low|normal|high",
 
-  "applicant_data": {{
+  "applicant_data": {
     "name": "Vor- und Nachname oder null",
     "first_name": "Vorname oder null",
     "last_name": "Nachname oder null",
     "email": "E-Mail oder null",
     "phone": "Telefon oder null"
-  }},
+  },
 
-  "property_data": {{
+  "property_data": {
     "address": "Vollständige Adresse oder null",
     "street": "Straße oder null",
     "house_number": "Hausnummer oder null",
@@ -1149,15 +1146,15 @@ Antworte NUR mit validem JSON:
     "object_type": "ETW|EFH|DHH|RH|MFH oder null",
     "usage": "Eigennutzung|Kapitalanlage oder null",
     "living_space": Zahl oder null
-  }},
+  },
 
-  "financing_data": {{
+  "financing_data": {
     "loan_amount": Zahl oder null,
     "equity": Zahl oder null
-  }},
+  },
 
   "answered_questions": [
-    {{"key": "feldname", "value": "antwort", "original_text": "Originaltext"}}
+    {"key": "feldname", "value": "antwort", "original_text": "Originaltext"}
   ],
 
   "mentioned_documents": ["Gehaltsnachweis", "Ausweis", ...],
@@ -1165,8 +1162,7 @@ Antworte NUR mit validem JSON:
   "google_drive_links": ["https://drive.google.com/drive/folders/..." oder leere Liste],
 
   "summary": "Kurze Zusammenfassung in einem Satz"
-}}
-"""
+}"""
 
 
 class EmailParseRequest(BaseModel):
@@ -1222,18 +1218,19 @@ async def parse_email(request: EmailParseRequest):
     # Reply-Detection
     is_likely_reply = any(x in request.subject.lower() for x in ['re:', 'aw:', 'fwd:', 'wg:'])
 
-    # GPT für Analyse
-    prompt = EMAIL_PARSE_PROMPT.format(
-        from_address=request.from_address,
-        from_name=request.from_name or "Unbekannt",
-        subject=request.subject,
-        body=request.body[:8000]  # Limit
+    # GPT für Analyse — System/User getrennt für OpenAI Prompt Caching
+    email_content = (
+        f"E-Mail:\nVon: {request.from_address} ({request.from_name or 'Unbekannt'})\n"
+        f"Betreff: {request.subject}\nText:\n{request.body[:8000]}"
     )
 
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
+            messages=[
+                {"role": "system", "content": EMAIL_PARSE_SYSTEM_PROMPT},
+                {"role": "user", "content": email_content},
+            ],
             max_tokens=2000,
             temperature=0.1
         )
