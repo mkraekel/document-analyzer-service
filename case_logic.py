@@ -233,19 +233,21 @@ def _is_junk(val) -> bool:
 
 def merge_facts(existing: dict, new_facts: dict) -> dict:
     """
-    Deep Merge: Bestehende Werte bleiben, neue füllen nur leere Slots.
+    Deep Merge: Last-write-wins — neuere Werte überschreiben ältere.
     Für Objekte wird rekursiv gemergt.
-    Junk-Werte (N/A, -, etc.) werden wie null behandelt.
+    Junk-Werte (N/A, -, etc.) und leere Werte werden ignoriert.
     """
     result = dict(existing)
     for key, val in new_facts.items():
         if _is_junk(val):
-            continue  # Junk-Werte nicht übernehmen
+            continue
+        if val is None or val == "":
+            continue
         existing_val = result.get(key)
-        if existing_val is None or existing_val == "" or _is_junk(existing_val):
-            result[key] = val
-        elif isinstance(val, dict) and isinstance(existing_val, dict):
+        if isinstance(val, dict) and isinstance(existing_val, dict):
             result[key] = merge_facts(existing_val, val)
+        else:
+            result[key] = val
     return result
 
 
