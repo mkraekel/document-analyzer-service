@@ -297,7 +297,7 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> tuple[str, int]:
         return "", 0
 
 
-def pdf_pages_to_images(pdf_bytes: bytes, max_pages: int = 2, dpi: int = 200) -> list[tuple[bytes, str]]:
+def pdf_pages_to_images(pdf_bytes: bytes, max_pages: int = 5, dpi: int = 200) -> list[tuple[bytes, str]]:
     """Rendert PDF-Seiten als PNG-Bilder (für gescannte Dokumente)."""
     images = []
     try:
@@ -427,7 +427,7 @@ def analyze_with_gpt4o(file_bytes: bytes, mime_type: str, filename: str) -> dict
             model = "gpt-4o-mini"  # Günstiger für Text-Only
         else:
             # PDF ohne Text (gescannt) → als Bild rendern und Vision API nutzen
-            page_images = pdf_pages_to_images(file_bytes, max_pages=2)
+            page_images = pdf_pages_to_images(file_bytes, max_pages=5)
             if page_images:
                 logger.info(f"Scan-PDF {filename}: {len(page_images)} Seiten als Bilder gerendert → Vision API")
                 content = [{"type": "text", "text": f"Dokument: {filename}"}]
