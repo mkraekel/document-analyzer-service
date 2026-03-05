@@ -32,6 +32,11 @@ ALLOWLIST = [
 
 OWN_DOMAIN = "@alexander-heil.com"
 
+# Blocklist: Diese Absender werden IMMER geblockt (Systembenachrichtigungen etc.)
+BLOCKLIST = [
+    "alexanderheil1@alexander-heil.com",
+]
+
 
 def gatekeeper(from_email: str, subject: str, conversation_id: str = None) -> dict:
     """
@@ -42,12 +47,17 @@ def gatekeeper(from_email: str, subject: str, conversation_id: str = None) -> di
     from_email = (from_email or "").lower().strip()
     subject = subject or ""
 
+    # Blocklist: sofort abweisen
+    if from_email in BLOCKLIST:
+        return {"pass": False, "reason": "sender_blocklisted", "actor": None, "is_internal_reply": False}
+
     REPLY_PATTERN = re.compile(r"^(re:|aw:|fwd:|wg:|antw:)", re.IGNORECASE)
     NON_FINANCE = re.compile(
-        r"(your receipt|receipt|invoice|rechnung|quittung|railway|booking|order\s*#|"
+        r"(your receipt|receipt|invoice|rechnung|quittung|railway|booking|buchung|order\s*#|"
         r"newsletter|webinar|statusänderung|abgesagt|nausys|funnelcockpit|"
         r"beitrag.*erhöhung|erhöhung.*beitrag|instagram|login|notification|"
-        r"mitteilungs.center|datenraum|angebotsbeziehung)", re.IGNORECASE
+        r"mitteilungs.center|datenraum|angebotsbeziehung|microsoft bookings|"
+        r"neue buchung von|terminbestätigung)", re.IGNORECASE
     )
     FINANCE_HINT = re.compile(r"(finanzierung|baufinanz|darlehen|kredit|objekt|kaufpreis|eigenkapital|unterlagen)", re.IGNORECASE)
 
