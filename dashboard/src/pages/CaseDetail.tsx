@@ -727,20 +727,8 @@ export function CaseDetail() {
                     const displayName = doc.file_name?.startsWith('gdrive:') ? doc.file_name.slice(7) : doc.file_name
                     return (
                     <tr key={i} className="border-b border-gray-100 hover:bg-gray-50">
-                      <td className="py-2 px-3 text-gray-900 truncate max-w-[200px]">
-                        <span className="flex items-center gap-1.5">
-                          {displayName}
-                          {doc.gdrive_url && (
-                            <a href={doc.gdrive_url} target="_blank" rel="noopener noreferrer" title="In Google Drive öffnen" className="text-blue-500 hover:text-blue-700 flex-shrink-0">
-                              <ExternalLink size={13} />
-                            </a>
-                          )}
-                          {!doc.gdrive_url && doc.onedrive_url && (
-                            <a href={doc.onedrive_url} target="_blank" rel="noopener noreferrer" title="In OneDrive öffnen" className="text-blue-500 hover:text-blue-700 flex-shrink-0">
-                              <ExternalLink size={13} />
-                            </a>
-                          )}
-                        </span>
+                      <td className="py-2 px-3 text-gray-900 truncate max-w-[200px]" title={displayName}>
+                        {displayName}
                       </td>
                       <td className="py-2 px-3 text-gray-600">{doc.doc_type || '-'}</td>
                       <td className="py-2 px-3">
@@ -752,8 +740,20 @@ export function CaseDetail() {
                           {doc.processing_status || '-'}
                         </span>
                       </td>
-                      <td className="py-2 px-3 text-gray-500 text-xs" title={doc.processed_at}>
-                        {formatTime(doc.processed_at)}
+                      <td className="py-2 px-3 text-gray-500 text-xs">
+                        <span className="flex items-center gap-1.5">
+                          <span title={doc.processed_at}>{formatTime(doc.processed_at)}</span>
+                          {doc.gdrive_url && (
+                            <a href={doc.gdrive_url} target="_blank" rel="noopener noreferrer" title="In Google Drive öffnen" className="text-blue-500 hover:text-blue-700 flex-shrink-0">
+                              <ExternalLink size={13} />
+                            </a>
+                          )}
+                          {!doc.gdrive_url && doc.onedrive_url && (
+                            <a href={doc.onedrive_url} target="_blank" rel="noopener noreferrer" title="In OneDrive öffnen" className="text-blue-500 hover:text-blue-700 flex-shrink-0">
+                              <ExternalLink size={13} />
+                            </a>
+                          )}
+                        </span>
                       </td>
                     </tr>
                   )})}
