@@ -43,6 +43,8 @@ export interface CaseDocument {
   extracted_fields: string[]
   gdrive_file_id?: string
   gdrive_url?: string
+  onedrive_file_id?: string
+  onedrive_url?: string
 }
 
 export interface CaseEmail {
