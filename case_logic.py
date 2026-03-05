@@ -235,7 +235,7 @@ def update_case_conversation(case_id: str, conversation_id: str):
         })
 
 
-_JUNK_VALUES = {"N/A", "n/a", "N.A.", "n.a.", "nicht verfügbar", "unbekannt", "-", "–", "k.A.", "k. A."}
+_JUNK_VALUES = {"N/A", "n/a", "N.A.", "n.a.", "nicht verfügbar", "unbekannt", "-", "–", "k.A.", "k. A.", "null", "None", "none"}
 
 
 def _is_junk(val) -> bool:
