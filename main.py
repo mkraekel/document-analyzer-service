@@ -129,6 +129,7 @@ Dokumenttyp erkennen aus: {doc_types}
 
 WICHTIGE KLASSIFIZIERUNGS-HINWEISE (MUSS beachtet werden):
 - Reisepass, Personalausweis (Vorder- UND Rückseite!), Aufenthaltstitel, Identitaetsdokument → "Ausweiskopie"
+- WICHTIG: Personalausweise können GEDREHT/SEITLICH fotografiert sein! Erkennungsmerkmale: Passfoto, "BUNDESREPUBLIK DEUTSCHLAND", "PERSONALAUSWEIS/IDENTITY CARD", Name, Geburtsdatum, Ausweisnummer, Unterschrift, Hologramm → IMMER "Ausweiskopie" auch wenn das Bild um 90° oder 180° gedreht ist!
 - Personalausweis-Rückseite erkennt man an: Anschrift/Adresse, Augenfarbe, Größe, Behörde/Authority, MRZ-Zeile (IDD<<...), Bundesdruckerei → IMMER "Ausweiskopie"!
 - Gehaltsabrechnung, Entgeltnachweis, Entgeltabrechnung, Lohnabrechnung, Lohnausweis, Verdienstbescheinigung, Brutto-Netto-Abrechnung, Bezuegemitteilung → "Gehaltsnachweis"
 - Renteninformation, Rentenauskunft, Deutsche Rentenversicherung, Renteninfo 20XX → "Renteninfo"
@@ -492,6 +493,38 @@ def analyze_with_gpt4o(file_bytes: bytes, mime_type: str, filename: str) -> dict
                 result["doc_type"] = fallback
                 result["meta"] = result.get("meta") or {}
                 result["meta"]["filename_fallback"] = True
+
+        # Rotation-Retry: Bild könnte physisch gedreht sein (kein EXIF-Fix möglich)
+        if result.get("doc_type") == "Sonstiges" and mime_type.startswith("image/") and not _filename_fallback_doc_type(filename):
+            try:
+                img = Image.open(BytesIO(file_bytes))
+                rotated_img = img.rotate(-90, expand=True)
+                buf = BytesIO()
+                fmt = "JPEG" if mime_type in ("image/jpeg", "image/jpg") else "PNG"
+                rotated_img.save(buf, format=fmt)
+                rotated_b64 = base64.standard_b64encode(buf.getvalue()).decode("utf-8")
+                logger.info(f"Sonstiges bei Bild {filename} — Retry mit 90°-Rotation")
+                retry_content = [
+                    {"type": "text", "text": f"Dokument: {filename} (gedrehte Version)"},
+                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{rotated_b64}", "detail": "high"}}
+                ]
+                retry_resp = client.chat.completions.create(
+                    model="gpt-4o", messages=[system_msg, {"role": "user", "content": retry_content}],
+                    max_tokens=4000, temperature=0.1
+                )
+                retry_text = retry_resp.choices[0].message.content
+                if "```json" in retry_text:
+                    retry_text = retry_text.split("```json")[1].split("```")[0]
+                elif "```" in retry_text:
+                    retry_text = retry_text.split("```")[1].split("```")[0]
+                retry_result = json.loads(retry_text.strip())
+                if retry_result.get("doc_type") != "Sonstiges":
+                    logger.info(f"Rotation-Retry erfolgreich: {retry_result.get('doc_type')} (war Sonstiges)")
+                    retry_result["meta"] = retry_result.get("meta") or {}
+                    retry_result["meta"]["rotation_retry"] = True
+                    return retry_result
+            except Exception as e:
+                logger.debug(f"Rotation-Retry fehlgeschlagen: {e}")
 
         return result
 
