@@ -354,6 +354,7 @@ async def dashboard_assign(req: AssignRequest):
                 asyncio.create_task(_trigger_setup_case(
                     case_id=req.case_id,
                     outlook_message_id=req.provider_message_id,
+                    applicant_name=case.get("applicant_name", ""),
                 ))
 
         return {"success": True, "case_id": req.case_id, "status": result.get("status")}
@@ -521,6 +522,7 @@ async def dashboard_create_case(req: CreateCaseFromTriageRequest):
             asyncio.create_task(_trigger_setup_case(
                 case_id=case_id,
                 outlook_message_id=req.provider_message_id,
+                applicant_name=req.applicant_name,
             ))
 
         return {"success": True, "case_id": case_id, "status": result.get("status")}
@@ -531,13 +533,14 @@ async def dashboard_create_case(req: CreateCaseFromTriageRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def _trigger_setup_case(case_id: str, outlook_message_id: str):
+async def _trigger_setup_case(case_id: str, outlook_message_id: str, applicant_name: str = ""):
     """Triggert n8n Setup-Case Webhook im Hintergrund (OneDrive + Attachment-Analyse)."""
     try:
         async with httpx.AsyncClient(timeout=180) as client:
             resp = await client.post(N8N_SETUP_CASE_WEBHOOK, json={
                 "case_id": case_id,
                 "outlook_message_id": outlook_message_id,
+                "applicant_name": applicant_name,
             })
             resp.raise_for_status()
             result = resp.json()

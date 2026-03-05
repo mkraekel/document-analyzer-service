@@ -2476,9 +2476,14 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
     db.log_processed_email(request.provider_message_id, parsed.get("mail_type", "new_request"), match["action"], case_id,
                            parsed_result=parsed, matched_by=match.get("matched_by"), **_log_kwargs)
 
+    # applicant_name für n8n Ordnerbenennung
+    _case_for_response = cases.load_case(case_id)
+    _applicant_name = _case_for_response.get("applicant_name", "") if _case_for_response else ""
+
     return {
         "action": "processed",
         "case_id": case_id,
+        "applicant_name": _applicant_name,
         "is_new_case": is_new,
         "status": readiness_result.get("status") if readiness_result else "INTAKE",
         "onedrive_folder_id": request.onedrive_folder_id,
