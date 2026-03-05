@@ -204,6 +204,12 @@ async def dashboard_case_detail(case_id: str):
             if file_name.startswith("gdrive:"):
                 file_name = file_name[7:]
             gdrive_id = d.get("gdrive_file_id", "")
+            onedrive_id = d.get("onedrive_file_id", "")
+            # OneDrive-Link: CID aus der Folder-ID extrahieren (Format: CID!sXXX)
+            onedrive_url = ""
+            if onedrive_id and "!" in onedrive_id:
+                cid = onedrive_id.split("!")[0]
+                onedrive_url = f"https://onedrive.live.com?cid={cid}&id={onedrive_id}"
             doc_list.append({
                 "file_name": file_name,
                 "doc_type": d.get("doc_type"),
@@ -212,6 +218,7 @@ async def dashboard_case_detail(case_id: str):
                 "extracted_fields": list(extracted.keys()) if extracted else [],
                 "gdrive_file_id": gdrive_id,
                 "gdrive_url": f"https://drive.google.com/file/d/{gdrive_id}/view" if gdrive_id else "",
+                "onedrive_url": onedrive_url,
             })
 
         email_list = []

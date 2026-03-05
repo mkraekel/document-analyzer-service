@@ -735,6 +735,11 @@ export function CaseDetail() {
                               <ExternalLink size={13} />
                             </a>
                           )}
+                          {!doc.gdrive_url && doc.onedrive_url && (
+                            <a href={doc.onedrive_url} target="_blank" rel="noopener noreferrer" title="In OneDrive öffnen" className="text-blue-500 hover:text-blue-700 flex-shrink-0">
+                              <ExternalLink size={13} />
+                            </a>
+                          )}
                         </span>
                       </td>
                       <td className="py-2 px-3 text-gray-600">{doc.doc_type || '-'}</td>
