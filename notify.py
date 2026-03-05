@@ -16,8 +16,6 @@ from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Optional
-from openai import OpenAI
-
 logger = logging.getLogger(__name__)
 
 SMTP_HOST = os.getenv("SMTP_HOST", "")
@@ -38,16 +36,6 @@ EMAIL_DRY_RUN = os.getenv("EMAIL_DRY_RUN", "false").lower() in ("true", "1", "ye
 # Key = (case_id, status), Value = timestamp des letzten Versands
 NOTIFICATION_COOLDOWN_SECONDS = int(os.getenv("NOTIFICATION_COOLDOWN_SECONDS", "600"))  # 10 min
 _notification_cooldown: dict[tuple[str, str], float] = {}
-
-_openai = None
-
-
-def _get_openai() -> OpenAI:
-    global _openai
-    if not _openai:
-        _openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    return _openai
-
 
 def _log_to_seatable(to: str, subject: str, html_body: str, text_body: str = None):
     """Schreibt E-Mail in SeaTable-Tabelle 'email_test_log' statt zu senden."""
@@ -116,108 +104,121 @@ def _send_email(to: str, subject: str, html_body: str, text_body: str = None):
         raise
 
 
-def _generate_questions_with_ai(
-    case_id: str,
+def _get_partner_first_name(effective_view: dict) -> str:
+    """Extrahiert den Vornamen des Vertriebspartners."""
+    full = effective_view.get("partner_name", "")
+    if full:
+        return full.strip().split()[0]
+    return ""
+
+
+# Labels fuer technische Keys
+_DATA_LABELS = {
+    "purchase_price": "Kaufpreis",
+    "loan_amount": "gewünschte Darlehenssumme",
+    "equity_to_use": "einzusetzendes Eigenkapital",
+    "object_type": "Objektart (z.B. ETW, Haus)",
+    "usage": "Nutzungsart (Eigennutzung/Kapitalanlage)",
+    "employment_type": "Beschäftigungsart",
+    "applicant_first_name": "Vorname des Antragstellers",
+    "applicant_last_name": "Nachname des Antragstellers",
+    "applicant_birth_date": "Geburtsdatum",
+    "net_income": "Nettoeinkommen (monatlich)",
+    "address_street": "Straße (Wohnadresse)",
+    "address_house_number": "Hausnummer",
+    "address_zip": "PLZ (Wohnadresse)",
+    "address_city": "Wohnort",
+    "self_employed_since": "Selbstständig seit (Datum)",
+    "profit_last_year": "Gewinn Vorjahr",
+    "marital_status": "Familienstand",
+    "children": "Anzahl Kinder",
+    "property_street": "Objektadresse (Straße)",
+    "property_zip": "Objektadresse (PLZ)",
+    "property_city": "Objektadresse (Ort)",
+}
+
+
+def _build_partner_email_body(
+    effective_view: dict,
     missing_financing: list,
+    missing_applicant_data: list,
     missing_docs: list,
     stale_docs: list,
-    effective_view: dict,
-    recipient: str,  # "partner" oder "broker"
-    language: str = "de",
-    missing_applicant_data: list = None,
 ) -> str:
-    """Generiert natürlichsprachliche Fragen per GPT-4o-mini"""
+    """Baut eine strukturierte E-Mail an den Vertriebspartner."""
+    partner_first = _get_partner_first_name(effective_view)
+    applicant_name = effective_view.get("applicant_name", "")
 
-    applicant_name = effective_view.get("applicant_name") or effective_view.get("applicant_first_name", "")
-    case_summary = []
+    greeting = f"Hallo {partner_first}," if partner_first else "Hallo,"
+    intro = f"für die Finanzierungsanfrage von {applicant_name}" if applicant_name else "für die vorliegende Finanzierungsanfrage"
 
-    # Fehlende Daten: technische Keys in deutsche Labels uebersetzen
-    DATA_LABELS = {
-        "purchase_price": "Kaufpreis",
-        "loan_amount": "Darlehenssumme",
-        "equity_to_use": "einzusetzendes Eigenkapital",
-        "object_type": "Objektart (z.B. ETW, Haus)",
-        "usage": "Nutzungsart (Eigennutzung/Kapitalanlage)",
-        "employment_type": "Beschäftigungsart",
-        "applicant_first_name": "Vorname des Antragstellers",
-        "applicant_last_name": "Nachname des Antragstellers",
-        "applicant_birth_date": "Geburtsdatum",
-        "net_income": "Nettoeinkommen",
-        "address_street": "Straße (Wohnadresse)",
-        "address_house_number": "Hausnummer (Wohnadresse)",
-        "address_zip": "PLZ (Wohnadresse)",
-        "address_city": "Wohnort",
-        "self_employed_since": "Selbstständig seit",
-        "profit_last_year": "Gewinn Vorjahr",
-    }
+    items = []
 
-    if missing_financing:
-        translated = [DATA_LABELS.get(f, f) for f in missing_financing]
-        case_summary.append(f"Fehlende Finanzierungsdaten: {', '.join(translated)}")
-    if missing_applicant_data:
-        translated = [DATA_LABELS.get(f, f) for f in missing_applicant_data]
-        case_summary.append(f"Fehlende Antragstellerdaten: {', '.join(translated)}")
+    # Fehlende Daten
+    all_missing_data = list(missing_financing or []) + list(missing_applicant_data or [])
+    if all_missing_data:
+        items.append("Folgende Angaben:")
+        for key in all_missing_data:
+            items.append(f"  - {_DATA_LABELS.get(key, key)}")
+
+    # Fehlende Dokumente
     if missing_docs:
-        doc_list = ", ".join(f"{d['type']} ({d['required']}x benötigt, {d['found']}x vorhanden)" for d in missing_docs)
-        case_summary.append(f"Fehlende Dokumente: {doc_list}")
-    if stale_docs:
-        stale_list = ", ".join(f"{d['type']} (zu alt)" for d in stale_docs)
-        case_summary.append(f"Veraltete Dokumente: {stale_list}")
+        items.append("Folgende Dokumente:")
+        for d in missing_docs:
+            count_info = f" ({d['required']}x benötigt)" if d.get("required", 1) > 1 else ""
+            items.append(f"  - {d['type']}{count_info}")
 
-    if not case_summary:
+    # Veraltete Dokumente
+    if stale_docs:
+        items.append("Folgende Dokumente in aktueller Fassung:")
+        for d in stale_docs:
+            items.append(f"  - {d['type']} (vorliegende Version ist leider zu alt)")
+
+    if not items:
         return ""
 
-    if recipient == "partner":
-        system = """Du bist ein freundlicher Assistent für Baufinanzierungsanfragen bei Alexander Heil Consulting.
-Schreibe eine höfliche E-Mail an den Vertriebspartner um fehlende Informationen/Dokumente zu erfragen.
-WICHTIG:
-- Verwende KEINE Case-IDs oder Referenznummern
-- Nenne den Antragsteller beim Namen
-- Sei konkret aber nicht technisch
-- Deutsch, professionell, freundlich
-- KEINE Signatur, KEIN "Mit freundlichen Grüßen", KEIN Name am Ende (wird automatisch ergaenzt)
-- Schreibe NUR den E-Mail-Body, NICHTS anderes"""
-        prompt = f"""Antragsteller: {applicant_name}
+    body = f"""{greeting}
 
-Bitte erfrage folgende fehlenden Informationen/Dokumente:
-{chr(10).join(case_summary)}
+{intro} bräuchte ich noch folgende Informationen, um die Anfrage bei der Bank einreichen zu können:
 
-Schreibe eine komplette E-Mail (nur Body, ohne Betreff, ohne Signatur). Beginne mit einer freundlichen Begrüßung.
-Beziehe dich auf den Antragsteller "{applicant_name}" beim Namen, NICHT auf eine Case-ID.
-WICHTIG: Beende den Text VOR der Grußformel. Schreibe NICHT "Mit freundlichen Grüßen" oder einen Namen/Position."""
-    else:
-        system = """Du bist ein internes Backoffice-System für Baufinanzierung bei Alexander Heil Consulting.
-Schreibe eine kurze, sachliche interne Info-E-Mail an das Backoffice-Team.
-WICHTIG:
-- Verwende KEINE Case-IDs oder Referenznummern im Text
-- Nenne den Antragsteller beim Namen
-- Liste fehlende Punkte als Aufzählung auf
-- KEINE Signatur, KEIN "[Dein Name]", KEINE Platzhalter
-- KEINE Handlungsanweisungen wie "Bitte kümmern Sie sich" – einfach nur auflisten was fehlt
-- Kurz und sachlich, max 10 Zeilen"""
-        prompt = f"""Antragsteller: {applicant_name}
+{chr(10).join(items)}
 
-Folgende Punkte sind noch offen:
-{chr(10).join(case_summary)}
+Könnten Sie mir diese Unterlagen/Informationen zukommen lassen?"""
 
-Schreibe eine kurze interne Info (nur Body, ohne Betreff, ohne Signatur).
-Beginne mit "Hallo," und liste danach nur auf was fehlt.
-WICHTIG: KEINE Signatur, KEIN Name, KEINE Platzhalter wie [Dein Name] am Ende."""
+    return body
 
-    try:
-        resp = _get_openai().chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=800,
-        )
-        return resp.choices[0].message.content or ""
-    except Exception as e:
-        logger.error(f"Question generation failed: {e}")
-        # Fallback: manuelle Liste
-        return f"Folgende Informationen werden benötigt:\n" + "\n".join(f"- {s}" for s in case_summary)
+
+def _build_broker_email_body(
+    effective_view: dict,
+    missing_financing: list,
+    missing_applicant_data: list,
+    missing_docs: list,
+    stale_docs: list,
+) -> str:
+    """Baut eine interne Info-E-Mail an das Backoffice."""
+    applicant_name = effective_view.get("applicant_name", "")
+    display = applicant_name or "Unbekannter Antragsteller"
+
+    items = []
+    all_missing_data = list(missing_financing or []) + list(missing_applicant_data or [])
+    if all_missing_data:
+        for key in all_missing_data:
+            items.append(f"- {_DATA_LABELS.get(key, key)}")
+    if missing_docs:
+        for d in missing_docs:
+            items.append(f"- {d['type']} (fehlt, {d['required']}x benötigt)")
+    if stale_docs:
+        for d in stale_docs:
+            items.append(f"- {d['type']} (veraltet)")
+
+    if not items:
+        return ""
+
+    return f"""Hallo,
+
+bei {display} fehlen noch:
+
+{chr(10).join(items)}"""
 
 
 def _is_internal_email(email: str) -> bool:
@@ -235,14 +236,12 @@ def send_partner_questions(case_id: str, partner_email: str, readiness_result: d
         return
 
     applicant_name = effective_view.get("applicant_name", "")
-    body = _generate_questions_with_ai(
-        case_id=case_id,
+    body = _build_partner_email_body(
+        effective_view=effective_view,
         missing_financing=readiness_result.get("missing_financing", []),
+        missing_applicant_data=readiness_result.get("missing_applicant_data", []),
         missing_docs=readiness_result.get("missing_docs", []),
         stale_docs=readiness_result.get("stale_docs", []),
-        effective_view=effective_view,
-        recipient="partner",
-        missing_applicant_data=readiness_result.get("missing_applicant_data", []),
     )
 
     if not body:
@@ -259,7 +258,7 @@ def send_partner_questions(case_id: str, partner_email: str, readiness_result: d
         to=partner_email,
         subject=f"Fehlende Unterlagen – Finanzierungsanfrage {subject_name}",
         html_body=html_body,
-        text_body=body,
+        text_body=body + "\n\nMit freundlichen Grüßen\nAlexander Heil Finanzierung",
     )
 
 
@@ -384,22 +383,20 @@ def send_reminder(case_id: str, readiness_result: dict, reminder_count: int, tar
             return
 
         applicant_name = view.get("applicant_name", "")
-        body = _generate_questions_with_ai(
-            case_id=case_id,
+        body = _build_partner_email_body(
+            effective_view=view,
             missing_financing=readiness_result.get("missing_financing", []),
+            missing_applicant_data=readiness_result.get("missing_applicant_data", []),
             missing_docs=readiness_result.get("missing_docs", []),
             stale_docs=readiness_result.get("stale_docs", []),
-            effective_view=view,
-            recipient="partner",
-            missing_applicant_data=readiness_result.get("missing_applicant_data", []),
         )
         if not body:
             logger.info(f"Reminder für {case_id}: kein Body generiert, überspringe")
             return
 
         reminder_note = (
-            f"\n\n--- Dies ist eine automatische Erinnerung (Nr. {reminder_count}). "
-            f"Wir haben noch keine Rückmeldung zu unserer vorherigen Anfrage erhalten. ---"
+            f"\n\nDies ist eine freundliche Erinnerung (Nr. {reminder_count}). "
+            f"Wir haben noch keine Rückmeldung zu unserer vorherigen Anfrage erhalten."
         )
         body_with_note = body + reminder_note
 
@@ -407,7 +404,7 @@ def send_reminder(case_id: str, readiness_result: dict, reminder_count: int, tar
 <p>{body.replace(chr(10), '<br>')}</p>
 <br>
 <p style="color: #666; font-size: 0.9em;">
-<em>Dies ist eine automatische Erinnerung (Nr. {reminder_count}).
+<em>Dies ist eine freundliche Erinnerung (Nr. {reminder_count}).
 Wir haben noch keine Rückmeldung zu unserer vorherigen Anfrage erhalten.</em></p>
 <br>
 <p>Mit freundlichen Grüßen<br>Alexander Heil Finanzierung</p>
@@ -418,7 +415,7 @@ Wir haben noch keine Rückmeldung zu unserer vorherigen Anfrage erhalten.</em></
             to=partner_email,
             subject=f"{prefix}Fehlende Unterlagen – Finanzierungsanfrage {subject_name}",
             html_body=html_body,
-            text_body=body_with_note,
+            text_body=body_with_note + "\n\nMit freundlichen Grüßen\nAlexander Heil Finanzierung",
         )
         logger.info(f"Reminder #{reminder_count} gesendet an Partner {partner_email} für Case {case_id}")
 

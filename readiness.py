@@ -252,7 +252,7 @@ def _compute_effective_view(case: dict) -> dict:
             view.update({k: v for k, v in src.items() if v is not None and v != ""})
 
     # Top-level Felder aus Case uebernehmen (nicht in JSON-Blobs gespeichert)
-    for top_key in ["applicant_name", "partner_email"]:
+    for top_key in ["applicant_name", "partner_email", "partner_name"]:
         if not view.get(top_key) and case.get(top_key):
             view[top_key] = case[top_key]
 

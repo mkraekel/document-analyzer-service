@@ -496,6 +496,7 @@ async def dashboard_create_case(req: CreateCaseFromTriageRequest):
             partner_phone="",
             conversation_id=conv_id,
             facts=facts,
+            partner_name=email.get("from_name", ""),
         )
 
         # 3. E-Mail zuordnen

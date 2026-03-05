@@ -2332,6 +2332,7 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
             partner_phone="",
             conversation_id=request.conversation_id,
             facts=facts,
+            partner_name=request.from_name or "",
         )
         needs_folder = True  # n8n soll OneDrive-Ordner erstellen
 

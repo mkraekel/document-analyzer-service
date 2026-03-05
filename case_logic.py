@@ -185,6 +185,7 @@ def create_case(
     conversation_id: str,
     facts: dict,
     source: str = "email",
+    partner_name: str = "",
 ) -> dict:
     """Erstellt neuen Case in SeaTable"""
     now = datetime.utcnow().isoformat()
@@ -192,6 +193,7 @@ def create_case(
         "case_id": case_id,
         "applicant_name": applicant_name or "",
         "partner_email": partner_email or "",
+        "partner_name": partner_name or "",
         "status": "INTAKE",
         "sources": source,
         "facts_extracted": json.dumps(facts or {}),

@@ -163,6 +163,7 @@ ALTER TABLE fin_cases ADD COLUMN IF NOT EXISTS onedrive_web_url TEXT DEFAULT '';
 ALTER TABLE fin_cases ADD COLUMN IF NOT EXISTS europace_case_id TEXT DEFAULT '';
 ALTER TABLE fin_cases ADD COLUMN IF NOT EXISTS europace_response JSONB DEFAULT '{}'::jsonb;
 ALTER TABLE fin_cases ADD COLUMN IF NOT EXISTS final_payload_preview TEXT DEFAULT '';
+ALTER TABLE fin_cases ADD COLUMN IF NOT EXISTS partner_name TEXT DEFAULT '';
 ALTER TABLE fin_documents ADD COLUMN IF NOT EXISTS gdrive_file_id TEXT DEFAULT '';
 ALTER TABLE processed_emails ADD COLUMN IF NOT EXISTS body_html TEXT DEFAULT '';
 """
