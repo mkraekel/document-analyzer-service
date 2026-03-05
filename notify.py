@@ -423,23 +423,31 @@ Wir haben noch keine Rückmeldung zu unserer vorherigen Anfrage erhalten.</em></
         logger.warning(f"Reminder für {case_id}: target={target}, partner_email={partner_email} – übersprungen")
 
 
-def dispatch_notifications(case_id: str, readiness_result: dict, force: bool = False):
+def dispatch_notifications(case_id: str, readiness_result: dict, force: bool = False, dry_run_override: bool = False):
     """
     Sendet die richtige Benachrichtigung basierend auf Status.
     Wird nach jedem Readiness Check aufgerufen.
 
     force=True überspringt den Cooldown (z.B. bei manuellem Recheck aus Dashboard).
+    dry_run_override=True erzwingt eine Partner-Mail unabhängig vom Status (für Test-Mails).
     """
     status = readiness_result.get("status")
     view = readiness_result.get("effective_view", {})
 
     # Cooldown Check: verhindert doppelten Versand bei schnell aufeinanderfolgenden Mails
-    if not force and not _check_cooldown(case_id, status):
+    if not force and not dry_run_override and not _check_cooldown(case_id, status):
         return
 
     import case_logic as cases
     case = cases.load_case(case_id)
     partner_email = case.get("partner_email", "") if case else ""
+
+    if dry_run_override:
+        # Test-Mail: Partner-Mail generieren unabhängig vom Status
+        # Verwende test@example.com um _is_internal_email Check zu umgehen
+        test_to = partner_email if partner_email and not _is_internal_email(partner_email) else "test@example.com"
+        send_partner_questions(case_id, test_to, readiness_result, view)
+        return
 
     if status == "NEEDS_QUESTIONS_PARTNER":
         send_partner_questions(case_id, partner_email, readiness_result, view)
@@ -455,8 +463,6 @@ def dispatch_notifications(case_id: str, readiness_result: dict, force: bool = F
 
     elif status == "READY_FOR_IMPORT":
         logger.info(f"Case {case_id} ready for import – warte auf manuelle Freigabe im Dashboard (Import-Button)")
-        # Kein automatischer Import-Trigger. Der Broker gibt den Import
-        # bewusst ueber den Dashboard-Button frei.
 
     else:
         logger.info(f"Status {status} – keine Benachrichtigung nötig")

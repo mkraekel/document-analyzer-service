@@ -935,6 +935,27 @@ async def dashboard_clear_outgoing_emails():
 
 
 # ──────────────────────────────────────────
+# API: Test-Mail (Dry-Run Notification)
+# ──────────────────────────────────────────
+
+@router.post("/api/dashboard/case/{case_id}/test-mail")
+async def dashboard_test_mail(case_id: str):
+    """Generiert eine Dry-Run Notification unabhängig vom Case-Status."""
+    try:
+        case = cases.load_case(case_id)
+        if not case:
+            raise HTTPException(status_code=404, detail="Case nicht gefunden")
+
+        readiness_result = rdns.check_readiness(case_id)
+        notify.dispatch_notifications(case_id, readiness_result, force=True, dry_run_override=True)
+        return {"success": True, "status": readiness_result.get("status")}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ──────────────────────────────────────────
 # API: Import Case to Europace
 # ──────────────────────────────────────────
 

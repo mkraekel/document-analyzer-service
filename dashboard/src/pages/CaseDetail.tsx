@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, ExternalLink, RefreshCw, Check, FileText,
-  Mail, Clock, Shield, ChevronDown, ChevronUp, Pencil, X as XIcon, Save, Eye, Loader, Archive, XCircle
+  Mail, Clock, Shield, ChevronDown, ChevronUp, Pencil, X as XIcon, Save, Eye, Loader, Archive, XCircle, Send
 } from 'lucide-react'
 import { useApiGet } from '../hooks/useApi'
 import { useToast } from '../hooks/useToast'
@@ -373,6 +373,24 @@ export function CaseDetail() {
             >
               <Archive size={14} />
               Archivieren
+            </button>
+            <button
+              onClick={async () => {
+                setBusy(true)
+                try {
+                  await api.post(`/api/dashboard/case/${caseId}/test-mail`)
+                  addToast('Test-Mail generiert – siehe Ausgehende E-Mails', 'info')
+                } catch (e) {
+                  addToast(e instanceof Error ? e.message : 'Fehler', 'error')
+                } finally {
+                  setBusy(false)
+                }
+              }}
+              disabled={busy}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-blue-300 text-blue-700 rounded-lg hover:bg-blue-50 disabled:opacity-50 transition-colors"
+            >
+              <Send size={14} />
+              Test-Mail
             </button>
             {c.status === 'READY_FOR_IMPORT' && (
               <>
