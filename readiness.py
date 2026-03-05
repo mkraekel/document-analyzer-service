@@ -533,19 +533,42 @@ def check_readiness(case_id: str) -> dict:
 
         fresh_docs = [d for d in docs if accept_stale or _doc_age_ok(d, max_age)]
 
-        if len(fresh_docs) < required_count:
-            if len(docs) >= required_count and not accept_stale:
+        # Kontoauszug: months_covered zählen statt Datei-Anzahl
+        # Ein PDF kann mehrere Monate abdecken (z.B. Quartal = 3 Monate)
+        if doc_type == "Kontoauszug":
+            effective_count = 0
+            for doc in fresh_docs:
+                ext = doc.get("extracted") or {}
+                months = ext.get("months_covered")
+                if months and isinstance(months, (int, float)) and months > 0:
+                    effective_count += int(months)
+                else:
+                    effective_count += 1
+            effective_count_all = 0
+            for doc in docs:
+                ext = doc.get("extracted") or {}
+                months = ext.get("months_covered")
+                if months and isinstance(months, (int, float)) and months > 0:
+                    effective_count_all += int(months)
+                else:
+                    effective_count_all += 1
+        else:
+            effective_count = len(fresh_docs)
+            effective_count_all = len(docs)
+
+        if effective_count < required_count:
+            if effective_count_all >= required_count and not accept_stale:
                 stale_docs.append({
                     "type": doc_type,
                     "required": required_count,
-                    "found": len(docs),
-                    "fresh": len(fresh_docs),
+                    "found": effective_count_all,
+                    "fresh": effective_count,
                 })
             else:
                 missing_docs.append({
                     "type": doc_type,
                     "required": required_count,
-                    "found": len(fresh_docs),
+                    "found": effective_count,
                 })
         else:
             # Ablaufdatum-Warnung
