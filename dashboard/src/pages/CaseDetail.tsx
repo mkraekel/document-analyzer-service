@@ -16,8 +16,9 @@ import type { CaseDetail as CaseDetailType, CaseDocument } from '../types/api'
 function findValue(view: Record<string, unknown>, ...paths: string[]): string {
   for (const path of paths) {
     // Try flat key
-    if (path in view && view[path] !== undefined && view[path] !== null && view[path] !== '') {
-      return String(view[path])
+    const flat = view[path]
+    if (flat !== undefined && flat !== null && flat !== '' && typeof flat !== 'object') {
+      return String(flat)
     }
     // Try nested path
     const parts = path.split('.')
@@ -31,7 +32,7 @@ function findValue(view: Record<string, unknown>, ...paths: string[]): string {
           break
         }
       }
-      if (current !== undefined && current !== null && current !== '') {
+      if (current !== undefined && current !== null && current !== '' && typeof current !== 'object') {
         return String(current)
       }
     }

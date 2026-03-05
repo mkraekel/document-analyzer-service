@@ -2847,15 +2847,26 @@ def _map_extracted_to_facts(doc_type: str, extracted: dict,
 
     elif doc_type in ("Exposé",):
         # Property data is shared
+        # GPT liefert Adresse manchmal als Objekt {Ort, PLZ, Straße} statt einzeln
+        _addr = extracted.get("Adresse") or extracted.get("Address") or {}
+        if isinstance(_addr, str):
+            _addr = {}  # String-Adresse ignorieren, Einzelfelder bevorzugen
+        _street = (extracted.get("Straße") or extracted.get("Strasse") or extracted.get("street")
+                   or (isinstance(_addr, dict) and (_addr.get("Straße") or _addr.get("Strasse") or _addr.get("StraßE") or _addr.get("street"))))
+        _hnr = (extracted.get("Hausnummer") or extracted.get("house_number")
+                or (isinstance(_addr, dict) and (_addr.get("Hausnummer") or _addr.get("house_number"))))
+        _plz = (extracted.get("PLZ") or extracted.get("zip")
+                or (isinstance(_addr, dict) and (_addr.get("PLZ") or _addr.get("zip"))))
+        _city = (extracted.get("Ort") or extracted.get("Stadt") or extracted.get("city")
+                 or (isinstance(_addr, dict) and (_addr.get("Ort") or _addr.get("Stadt") or _addr.get("city"))))
         facts["property_data"] = {
             "purchase_price": extracted.get("Kaufpreis") or extracted.get("purchase_price"),
-            "address": extracted.get("Adresse"),
-            "street": extracted.get("Straße") or extracted.get("Strasse") or extracted.get("street"),
-            "house_number": extracted.get("Hausnummer") or extracted.get("house_number"),
-            "zip": extracted.get("PLZ") or extracted.get("zip"),
-            "plz": extracted.get("PLZ"),
-            "city": extracted.get("Ort") or extracted.get("Stadt") or extracted.get("city"),
-            "ort": extracted.get("Ort") or extracted.get("Stadt"),
+            "street": _street or None,
+            "house_number": _hnr or None,
+            "zip": _plz or None,
+            "plz": _plz or None,
+            "city": _city or None,
+            "ort": _city or None,
             "object_type": extracted.get("Objekttyp") or extracted.get("object_type"),
             "usage": extracted.get("Nutzungsart") or extracted.get("usage"),
             "living_space": extracted.get("Wohnfläche") or extracted.get("Wohnflaeche"),

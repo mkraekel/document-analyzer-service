@@ -82,9 +82,9 @@ KEY_SEARCH_PATHS = {
     "employed_since": ["applicant_data.employed_since", "employment_data.employed_since", "employed_since", "beschaeftigt_seit"],
     "marital_status": ["household_data.marital_status", "applicant_data.marital_status", "applicant_data.familienstand", "marital_status", "familienstand"],
     "children": ["household_data.children", "applicant_data.children", "applicant_data.kinder", "children", "kinder"],
-    "property_street": ["property_data.street", "property_data.strasse", "property_data.address"],
-    "property_city": ["property_data.city", "property_data.ort"],
-    "property_zip": ["property_data.zip", "property_data.plz"],
+    "property_street": ["property_data.street", "property_data.strasse", "property_street"],
+    "property_city": ["property_data.city", "property_data.ort", "property_city"],
+    "property_zip": ["property_data.zip", "property_data.plz", "property_zip"],
     "living_space": ["property_data.living_space", "property_data.living_area", "living_space", "living_area", "wohnflaeche"],
     "year_built": ["property_data.year_built", "year_built", "baujahr"],
     "zinsbindung": ["zinsbindung", "financing_data.zinsbindung"],
@@ -384,11 +384,11 @@ def _count_docs_with_aliases(docs_index: dict, doc_type: str) -> list:
 
 
 def _find_value(view: dict, key: str):
-    """Sucht einen Wert über alle konfigurierten Suchpfade."""
+    """Sucht einen Wert über alle konfigurierten Suchpfade. Ignoriert dict/list-Werte."""
     paths = KEY_SEARCH_PATHS.get(key, [key])
     for path in paths:
         value = _get_nested(view, path)
-        if value is not None and value != "":
+        if value is not None and value != "" and not isinstance(value, (dict, list)):
             return value
     return None
 
