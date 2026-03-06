@@ -1,35 +1,36 @@
 """
 Notification Sender
-Versendet E-Mails per SMTP basierend auf Case-Status.
-Portiert aus Readiness Router (n8n SMTP Nodes + GPT-4o Question Generator).
+Erstellt E-Mail-Drafts via Microsoft Graph API basierend auf Case-Status.
+
+Die Mails werden NICHT gesendet, sondern als Entwurf im Outlook-Postfach
+abgelegt. So kann der Broker vor dem Versand noch pruefen/anpassen.
 
 DRY-RUN MODUS:
-  EMAIL_DRY_RUN=true  → Kein echter Versand, alle E-Mails landen in der
-                         SeaTable-Tabelle "email_test_log" (sichtbar im Browser).
+  EMAIL_DRY_RUN=true  → Kein Draft, E-Mails landen nur im Log.
 """
 
 import os
 import logging
-import smtplib
 import time
 from datetime import datetime
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from typing import Optional
+
+import httpx
+
 logger = logging.getLogger(__name__)
 
-SMTP_HOST = os.getenv("SMTP_HOST", "")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-SMTP_USER = os.getenv("SMTP_USER", "")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
-SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER)
+# Microsoft Graph API Credentials (Client Credentials Flow)
+MS_GRAPH_TENANT_ID = os.getenv("MS_GRAPH_TENANT_ID", "")
+MS_GRAPH_CLIENT_ID = os.getenv("MS_GRAPH_CLIENT_ID", "")
+MS_GRAPH_CLIENT_SECRET = os.getenv("MS_GRAPH_CLIENT_SECRET", "")
+MS_GRAPH_MAIL_USER = os.getenv("MS_GRAPH_MAIL_USER", "")  # Mailbox fuer Drafts (z.B. backoffice@...)
 
 BROKER_EMAIL = os.getenv("BROKER_EMAIL", "backoffice@alexander-heil.com")
 
 # Interne Domains: E-Mails an diese Adressen werden NICHT als Partner-Rueckfragen verschickt
 INTERNAL_DOMAINS = {"alexander-heil.com"}
 
-# Dry-Run: EMAIL_DRY_RUN=true → kein echter Versand, Eintrag in SeaTable
+# Dry-Run: EMAIL_DRY_RUN=true → kein Draft, nur Log
 EMAIL_DRY_RUN = os.getenv("EMAIL_DRY_RUN", "false").lower() in ("true", "1", "yes")
 
 # Notification Cooldown: verhindert doppelten Versand derselben Notification
@@ -37,10 +38,75 @@ EMAIL_DRY_RUN = os.getenv("EMAIL_DRY_RUN", "false").lower() in ("true", "1", "ye
 NOTIFICATION_COOLDOWN_SECONDS = int(os.getenv("NOTIFICATION_COOLDOWN_SECONDS", "600"))  # 10 min
 _notification_cooldown: dict[tuple[str, str], float] = {}
 
-def _log_to_seatable(to: str, subject: str, html_body: str, text_body: str = None):
-    """Schreibt E-Mail in SeaTable-Tabelle 'email_test_log' statt zu senden."""
+# Cached Graph API token
+_graph_token: Optional[str] = None
+_graph_token_expires: float = 0
+
+
+def _get_graph_token() -> str:
+    """Holt einen Microsoft Graph API Token via Client Credentials Flow. Cached bis Ablauf."""
+    global _graph_token, _graph_token_expires
+
+    if _graph_token and time.time() < _graph_token_expires - 60:
+        return _graph_token
+
+    if not MS_GRAPH_TENANT_ID or not MS_GRAPH_CLIENT_ID or not MS_GRAPH_CLIENT_SECRET:
+        raise RuntimeError("MS_GRAPH_TENANT_ID, MS_GRAPH_CLIENT_ID und MS_GRAPH_CLIENT_SECRET muessen gesetzt sein")
+
+    token_url = f"https://login.microsoftonline.com/{MS_GRAPH_TENANT_ID}/oauth2/v2.0/token"
+    resp = httpx.post(token_url, data={
+        "grant_type": "client_credentials",
+        "client_id": MS_GRAPH_CLIENT_ID,
+        "client_secret": MS_GRAPH_CLIENT_SECRET,
+        "scope": "https://graph.microsoft.com/.default",
+    }, timeout=15.0)
+
+    if resp.status_code != 200:
+        raise RuntimeError(f"Graph token request failed ({resp.status_code}): {resp.text[:500]}")
+
+    data = resp.json()
+    _graph_token = data["access_token"]
+    _graph_token_expires = time.time() + data.get("expires_in", 3600)
+    logger.info("[Graph] Token acquired, expires in %ds", data.get("expires_in", 3600))
+    return _graph_token
+
+
+def _create_draft(to: str, subject: str, html_body: str):
+    """Erstellt einen E-Mail-Draft im Outlook-Postfach via Microsoft Graph API."""
+    token = _get_graph_token()
+    mail_user = MS_GRAPH_MAIL_USER or BROKER_EMAIL
+
+    url = f"https://graph.microsoft.com/v1.0/users/{mail_user}/messages"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "subject": subject,
+        "body": {
+            "contentType": "HTML",
+            "content": html_body,
+        },
+        "toRecipients": [
+            {"emailAddress": {"address": to}}
+        ],
+        "isDraft": True,
+    }
+
+    resp = httpx.post(url, json=payload, headers=headers, timeout=15.0)
+
+    if resp.status_code in (200, 201):
+        msg_id = resp.json().get("id", "")
+        logger.info(f"[Graph] Draft erstellt fuer {to}: {subject} (id={msg_id[:20]}...)")
+    else:
+        logger.error(f"[Graph] Draft erstellen fehlgeschlagen ({resp.status_code}): {resp.text[:500]}")
+        raise RuntimeError(f"Graph API error {resp.status_code}: {resp.text[:200]}")
+
+
+def _log_to_db(to: str, subject: str, html_body: str, text_body: str = None):
+    """Schreibt E-Mail in DB email_test_log (Dry-Run oder Fallback)."""
     try:
-        import seatable as db
+        import db_postgres as db
         db.create_row("email_test_log", {
             "to": to,
             "subject": subject,
@@ -49,58 +115,31 @@ def _log_to_seatable(to: str, subject: str, html_body: str, text_body: str = Non
             "logged_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
             "dry_run": True,
         })
-        logger.info(f"[DRY-RUN] E-Mail nach SeaTable email_test_log: To={to} | {subject}")
+        logger.info(f"[DRY-RUN] E-Mail geloggt: To={to} | {subject}")
     except Exception as e:
-        # Fallback auf Log-Datei wenn SeaTable nicht erreichbar
-        logger.warning(f"[DRY-RUN] SeaTable-Log fehlgeschlagen ({e}), schreibe in dry_run_emails.log")
-        _log_to_file(to, subject, html_body, text_body)
-
-
-def _log_to_file(to: str, subject: str, html_body: str, text_body: str = None):
-    """Fallback: schreibt E-Mail in lokale Datei dry_run_emails.log."""
-    try:
-        log_path = os.path.join(os.path.dirname(__file__), "dry_run_emails.log")
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(f"\n{'='*60}\n")
-            f.write(f"[{datetime.utcnow().isoformat()}] DRY-RUN E-MAIL\n")
-            f.write(f"To:      {to}\n")
-            f.write(f"Subject: {subject}\n")
-            f.write(f"Body:\n{text_body or html_body}\n")
-    except Exception as e:
-        logger.error(f"[DRY-RUN] Log-Datei konnte nicht geschrieben werden: {e}")
+        logger.warning(f"[DRY-RUN] DB-Log fehlgeschlagen ({e})")
+        logger.info(f"[DRY-RUN] To={to} | Subject={subject}")
 
 
 def _send_email(to: str, subject: str, html_body: str, text_body: str = None):
-    """E-Mail versenden – oder im Dry-Run-Modus nach SeaTable loggen."""
+    """Erstellt einen E-Mail-Draft in Outlook – oder loggt im Dry-Run-Modus."""
 
-    # Dry-Run: kein echter Versand
+    # Dry-Run: kein Draft, nur loggen
     if EMAIL_DRY_RUN:
-        _log_to_seatable(to, subject, html_body, text_body)
+        _log_to_db(to, subject, html_body, text_body)
         return
 
-    # SMTP nicht konfiguriert
-    if not SMTP_HOST or not SMTP_USER:
-        logger.warning(f"SMTP nicht konfiguriert – E-Mail an {to} nicht gesendet")
-        logger.info(f"E-Mail Inhalt:\nTo: {to}\nSubject: {subject}\n{text_body or html_body}")
+    # Graph API nicht konfiguriert
+    if not MS_GRAPH_CLIENT_ID or not MS_GRAPH_TENANT_ID:
+        logger.warning(f"MS Graph nicht konfiguriert – Draft fuer {to} nicht erstellt")
+        _log_to_db(to, subject, html_body, text_body)
         return
-
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = SMTP_FROM
-    msg["To"] = to
-
-    if text_body:
-        msg.attach(MIMEText(text_body, "plain", "utf-8"))
-    msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASSWORD)
-            server.sendmail(SMTP_FROM, to, msg.as_string())
-        logger.info(f"E-Mail gesendet an {to}: {subject}")
+        _create_draft(to, subject, html_body)
     except Exception as e:
-        logger.error(f"SMTP Fehler beim Senden an {to}: {e}")
+        logger.error(f"Draft-Erstellung fehlgeschlagen fuer {to}: {e}")
+        _log_to_db(to, subject, html_body, text_body)
         raise
 
 
