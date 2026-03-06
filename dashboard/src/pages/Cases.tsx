@@ -17,7 +17,7 @@ export function Cases() {
   const [page, setPage] = useState(1)
   const [showArchived, setShowArchived] = useState(false)
 
-  const HIDDEN_STATUSES = new Set(['ARCHIVED', 'DECLINED', 'IMPORTED'])
+  const HIDDEN_STATUSES = new Set(['ARCHIVED', 'DECLINED'])
   const cases = data?.cases || []
 
   const filtered = useMemo(() => {

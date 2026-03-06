@@ -395,17 +395,19 @@ export function CaseDetail() {
             {c.status === 'READY_FOR_IMPORT' && (
               <>
                 <button
-                  disabled
-                  title="Europace API-Key noch nicht konfiguriert"
-                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-gray-200 text-gray-400 rounded-lg cursor-not-allowed"
+                  onClick={() => doImport(true)}
+                  disabled={busy}
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-indigo-300 text-indigo-700 rounded-lg hover:bg-indigo-50 disabled:opacity-50 transition-colors"
                 >
+                  <Eye size={14} />
                   Dry-Run Import
                 </button>
                 <button
-                  disabled
-                  title="Europace API-Key noch nicht konfiguriert"
-                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium bg-gray-300 text-gray-500 rounded-lg cursor-not-allowed"
+                  onClick={() => { if (confirm('Case jetzt an Europace senden?')) doImport(false) }}
+                  disabled={busy}
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors"
                 >
+                  <Send size={14} />
                   Import starten
                 </button>
               </>
@@ -413,6 +415,21 @@ export function CaseDetail() {
           </div>
         </div>
       </div>
+
+      {/* Europace Import Erfolg */}
+      {c.status === 'IMPORTED' && (
+        <div className="bg-emerald-50 border border-emerald-300 rounded-xl px-4 py-3 mb-4 shadow-sm">
+          <div className="flex items-center gap-3">
+            <Check size={20} className="text-emerald-600 shrink-0" />
+            <div>
+              <h3 className="text-sm font-semibold text-emerald-900">Erfolgreich an Europace übermittelt</h3>
+              {c.europace_case_id && (
+                <p className="text-sm text-emerald-700 mt-0.5">Europace-ID: <span className="font-mono font-semibold">{c.europace_case_id}</span></p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Investagon Banner */}
       {(c.investagon_links || []).length > 0 && (
