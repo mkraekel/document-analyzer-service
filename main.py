@@ -825,81 +825,8 @@ async def check_readiness_endpoint(request: ReadinessRequest):
 # EUROPACE PAYLOAD BUILDER ENDPOINT
 # ============================================
 
-EUROPACE_ENUMS = {
-    "anrede": {"Herr": "HERR", "Frau": "FRAU"},
-    "familienstand": {
-        "ledig": "LEDIG",
-        "verheiratet": "VERHEIRATET",
-        "geschieden": "GESCHIEDEN",
-        "verwitwet": "VERWITWET",
-        "eingetragene Lebenspartnerschaft": "LEBENSPARTNERSCHAFT"
-    },
-    "objektart": {
-        "ETW": "EIGENTUMSWOHNUNG",
-        "EFH": "EINFAMILIENHAUS",
-        "DHH": "DOPPELHAUSHAELFTE",
-        "RH": "REIHENHAUS",
-        "MFH": "MEHRFAMILIENHAUS",
-        "Eigentumswohnung": "EIGENTUMSWOHNUNG",
-        "Einfamilienhaus": "EINFAMILIENHAUS"
-    },
-    "nutzungsart": {
-        "Eigennutzung": "EIGENGENUTZT",
-        "Kapitalanlage": "VERMIETET",
-        "Teilvermietet": "TEILWEISE_VERMIETET"
-    },
-    "beschaeftigungsart": {
-        "Angestellter": "ANGESTELLTER",
-        "Selbstständig": "SELBSTAENDIGER",
-        "Beamter": "BEAMTER",
-        "Rentner": "RENTNER",
-        "Sonstiges": "SONSTIGES"
-    }
-}
-
-
-def map_enum(value, enum_map):
-    """Map value to Europace enum"""
-    if not value or not enum_map:
-        return None
-    return enum_map.get(value, value)
-
-
-def clean_payload(obj):
-    """Remove None/empty values from nested dict"""
-    if obj is None:
-        return None
-    if not isinstance(obj, dict):
-        return obj
-    if isinstance(obj, list):
-        cleaned = [clean_payload(v) for v in obj if clean_payload(v) is not None]
-        return cleaned if cleaned else None
-
-    cleaned = {}
-    for k, v in obj.items():
-        if v is None or v == "" or v == []:
-            continue
-        if isinstance(v, dict):
-            nested = clean_payload(v)
-            if nested:
-                cleaned[k] = nested
-        elif isinstance(v, list):
-            nested = clean_payload(v)
-            if nested:
-                cleaned[k] = nested
-        else:
-            cleaned[k] = v
-    return cleaned if cleaned else None
-
-
 class EuropaceRequest(BaseModel):
     case_id: str
-    facts_extracted: Optional[dict] = None
-    answers_user: Optional[dict] = None
-    manual_overrides: Optional[dict] = None
-    derived_values: Optional[dict] = None
-    partner_id: Optional[str] = None
-    tippgeber_partner_id: Optional[str] = None
 
 
 class EuropaceResponse(BaseModel):
@@ -912,260 +839,32 @@ class EuropaceResponse(BaseModel):
 
 
 @app.post("/build-europace-payload", response_model=EuropaceResponse)
-async def build_europace_payload(request: EuropaceRequest):
+async def build_europace_payload_endpoint(request: EuropaceRequest):
     """
     Baut den Europace API Payload aus den Case-Daten.
-
-    Führt auch Validierung durch:
-    - Strukturelle Prüfung (Pflichtfelder)
-    - Wertbereichs-Prüfung (Kaufpreis, Alter, etc.)
-    - Plausibilitäts-Prüfung (Verhältnisse)
+    Delegiert an import_builder fuer korrekte Europace API v1.0 Struktur.
     """
-    from datetime import datetime
+    import import_builder
 
-    # Build case_data dict from request
-    case_data = {
-        "case_id": request.case_id,
-        "facts_extracted": request.facts_extracted or {},
-        "answers_user": request.answers_user or {},
-        "manual_overrides": request.manual_overrides or {},
-        "derived_values": request.derived_values or {}
-    }
+    try:
+        build_result = import_builder.build_europace_payload(request.case_id)
+    except ValueError as e:
+        return EuropaceResponse(
+            case_id=request.case_id, success=False,
+            validation_errors=[str(e)], is_valid=False,
+        )
 
-    effective_view = compute_effective_view(case_data)
-
-
-    def get_value(primary, *fallbacks):
-        """Get value with fallback paths"""
-        val = get_nested_value(effective_view, primary)
-        if val is not None:
-            return val
-        for fb in fallbacks:
-            val = get_nested_value(effective_view, fb)
-            if val is not None:
-                return val
-        return None
-
-    def build_kunde(prefix, id_suffix):
-        """Build customer object for Europace"""
-        p = f"{prefix}." if prefix else "applicant_data."
-        p_alt = prefix.replace("applicant_data", "applicant") if prefix else "applicant"
-
-        return {
-            "externeKundenId": f"{request.case_id}{id_suffix}",
-            "personendaten": {
-                "anrede": map_enum(get_value(f"{p}salutation", f"{p_alt}_salutation"), EUROPACE_ENUMS["anrede"]),
-                "titel": get_value(f"{p}title", f"{p_alt}_title"),
-                "vorname": get_value(f"{p}first_name", f"{p_alt}_first_name"),
-                "nachname": get_value(f"{p}last_name", f"{p_alt}_last_name"),
-                "geburtsdatum": get_value(f"{p}birth_date", f"{p_alt}_birth_date"),
-                "geburtsort": get_value(f"{p}birth_place", f"{p_alt}_birth_place"),
-                "staatsangehoerigkeit": get_value(f"{p}nationality", f"{p_alt}_nationality") or "DE",
-                "steuerId": get_value(f"{p}tax_id", f"{p_alt}_tax_id")
-            },
-            "kontakt": {
-                "telefonPrivat": get_value(f"{p}phone", f"{p_alt}_phone"),
-                "email": get_value(f"{p}email", f"{p_alt}_email")
-            },
-            "wohnsituation": None if prefix == "applicant_data_2" else {
-                "anschrift": {
-                    "strasse": get_value("address_data.street"),
-                    "hausnummer": get_value("address_data.house_number"),
-                    "plz": get_value("address_data.zip"),
-                    "ort": get_value("address_data.city")
-                },
-                "wohnhaftSeit": get_value("address_data.resident_since")
-            },
-            "familienstand": {
-                "familienstand": map_enum(get_value("household_data.marital_status"), EUROPACE_ENUMS["familienstand"])
-            },
-            "beschaeftigung": {
-                "beschaeftigungsverhaeltnis": {
-                    "beschaeftigungsart": map_enum(get_value(f"{p}employment_type", f"{p_alt}_employment_type"), EUROPACE_ENUMS["beschaeftigungsart"]),
-                    "beruf": get_value(f"{p}occupation", f"{p_alt}_occupation"),
-                    "arbeitgeber": {
-                        "name": get_value(f"{p}employer", f"{p_alt}_employer"),
-                        "inDeutschland": get_value(f"{p}employer_in_germany", f"{p_alt}_employer_in_germany") is not False
-                    },
-                    "beschaeftigtSeit": get_value(f"{p}employed_since", f"{p_alt}_employed_since"),
-                    "befristet": get_value(f"{p}employment_status", f"{p_alt}_employment_status") == "befristet",
-                    "inProbezeit": get_value(f"{p}probation", f"{p_alt}_probation") or False
-                }
-            },
-            "einkommenNetto": {
-                "monatlichesNettoEinkommen": get_value(f"{p}net_income", f"{p}monthly_income", f"{p_alt}_monthly_income"),
-                "anzahlGehaelterProJahr": get_value(f"{p}salaries_per_year", f"{p_alt}_salaries_per_year") or 12
-            }
-        }
-
-    # Build customers
-    kunde1 = build_kunde("applicant_data", "_1")
-    kunden = [kunde1]
-
-    # Check for couple
-    is_couple = (
-        get_value("is_couple") is True or
-        get_value("applicant_2_first_name") is not None or
-        get_value("applicant_data_2.first_name") is not None
+    validation = import_builder.validate_payload(
+        build_result["payload"], build_result["effective_view"]
     )
-
-    if is_couple:
-        kunde2 = build_kunde("applicant_data_2", "_2")
-        if kunde2.get("personendaten", {}).get("vorname") or kunde2.get("personendaten", {}).get("nachname"):
-            kunden.append(kunde2)
-
-    # Build payload - mit allen möglichen Pfaden für jeden Wert
-    kaufpreis = get_value("purchase_price", "property_data.purchase_price", "financing_data.purchase_price")
-    loan_amount = get_value("loan_amount", "financing_data.loan_amount")
-    equity = get_value("equity_to_use", "financing_data.equity_to_use", "equity")
-    object_type = get_value("object_type", "property_data.object_type")
-    usage = get_value("usage", "property_data.usage")
-
-    payload = {
-        "kundenangaben": {
-            "haushalte": [{
-                "kunden": kunden,
-                "finanzielleSituation": {
-                    "vermoegen": {
-                        "summeBankUndSparguthaben": get_value("assets.bank_savings", "bank_savings"),
-                        "summeBausparvertraege": get_value("assets.bauspar", "bauspar")
-                    }
-                },
-                "finanzbedarf": {
-                    "fahrzeuge": {
-                        "anzahlPKWGesamt": get_value("household_data.cars_in_household", "cars_in_household") or 0
-                    }
-                }
-            }],
-            "finanzierungsobjekt": {
-                "immobilie": {
-                    "objektart": map_enum(object_type, EUROPACE_ENUMS["objektart"]),
-                    "nutzungsart": map_enum(usage, EUROPACE_ENUMS["nutzungsart"]),
-                    "adresse": {
-                        "strasse": get_value("property_data.street", "object_street"),
-                        "hausnummer": get_value("property_data.house_number", "object_house_number"),
-                        "plz": get_value("property_data.zip", "object_zip"),
-                        "ort": get_value("property_data.city", "object_city")
-                    },
-                    "wohnflaeche": get_value("property_data.living_space", "living_space"),
-                    "baujahr": get_value("property_data.year_built", "year_built"),
-                    "kaufpreis": kaufpreis,
-                    "marktwert": get_value("property_data.market_value", "market_value") or kaufpreis
-                }
-            },
-            "finanzierungswunsch": {
-                "darlehenssumme": loan_amount,
-                "eigenkapital": equity,
-                "zinsbindungInJahren": get_value("zinsbindung") or 10,
-                "wunschrate": get_value("wunschrate")
-            }
-        },
-        "bearbeiter": {
-            "partnerId": request.partner_id or get_value("partnerId"),
-            "tippgeberPartnerId": request.tippgeber_partner_id or get_value("tippgeberPartnerId")
-        }
-    }
-
-    # Clean payload
-    cleaned_payload = clean_payload(payload)
-
-    # ============================================
-    # VALIDATION
-    # ============================================
-    errors = []
-    warnings = []
-    current_year = datetime.now().year
-
-    kundenangaben = cleaned_payload.get("kundenangaben", {}) if cleaned_payload else {}
-    haushalte = kundenangaben.get("haushalte", [{}])[0] if kundenangaben.get("haushalte") else {}
-    kunde = haushalte.get("kunden", [{}])[0] if haushalte.get("kunden") else {}
-    immobilie = kundenangaben.get("finanzierungsobjekt", {}).get("immobilie", {})
-    finanzierungswunsch = kundenangaben.get("finanzierungswunsch", {})
-
-    # Required fields
-    if not kunde.get("personendaten", {}).get("vorname"):
-        errors.append("Pflichtfeld: Vorname fehlt")
-    if not kunde.get("personendaten", {}).get("nachname"):
-        errors.append("Pflichtfeld: Nachname fehlt")
-    if not immobilie.get("objektart"):
-        errors.append("Pflichtfeld: Objektart fehlt")
-    if not immobilie.get("nutzungsart"):
-        errors.append("Pflichtfeld: Nutzungsart fehlt")
-    if not immobilie.get("kaufpreis") and not immobilie.get("marktwert"):
-        errors.append("Pflichtfeld: Kaufpreis/Marktwert fehlt")
-    if not finanzierungswunsch.get("darlehenssumme"):
-        errors.append("Pflichtfeld: Darlehenssumme fehlt")
-    if finanzierungswunsch.get("eigenkapital") is None:
-        errors.append("Pflichtfeld: Eigenkapital fehlt")
-
-    # Value ranges
-    kp = immobilie.get("kaufpreis") or immobilie.get("marktwert") or 0
-    darlehen = finanzierungswunsch.get("darlehenssumme") or 0
-    ek = finanzierungswunsch.get("eigenkapital") or 0
-    wohnflaeche = immobilie.get("wohnflaeche")
-    baujahr = immobilie.get("baujahr")
-
-    if kp > 0:
-        if kp < 30000:
-            errors.append(f"Kaufpreis zu niedrig ({kp:,} €) - Minimum 30.000 €")
-        if kp > 10000000:
-            errors.append(f"Kaufpreis zu hoch ({kp:,} €) - Maximum 10.000.000 €")
-
-    if darlehen > 0:
-        if darlehen < 10000:
-            errors.append(f"Darlehenssumme zu niedrig ({darlehen:,} €) - Minimum 10.000 €")
-        if darlehen > 10000000:
-            errors.append(f"Darlehenssumme zu hoch ({darlehen:,} €) - Maximum 10.000.000 €")
-
-    if ek < 0:
-        errors.append(f"Eigenkapital kann nicht negativ sein ({ek:,} €)")
-    if kp > 0 and ek > kp * 1.5:
-        errors.append(f"Eigenkapital ({ek:,} €) > 150% des Kaufpreises")
-
-    if wohnflaeche is not None:
-        if wohnflaeche < 15:
-            warnings.append(f"Wohnfläche sehr klein ({wohnflaeche} m²)")
-        if wohnflaeche > 2000:
-            errors.append(f"Wohnfläche zu groß ({wohnflaeche} m²)")
-
-    if baujahr is not None:
-        if baujahr < 1800:
-            errors.append(f"Baujahr zu alt ({baujahr})")
-        if baujahr > current_year + 2:
-            errors.append(f"Baujahr in der Zukunft ({baujahr})")
-
-    # Ratio checks
-    if kp > 0 and darlehen > 0:
-        if darlehen > kp * 1.2:
-            warnings.append(f"Darlehenssumme > 120% des Kaufpreises - Vollfinanzierung?")
-        ek_quote = (ek / kp) * 100
-        if ek_quote < 5 and ek > 0:
-            warnings.append(f"Eigenkapitalquote sehr niedrig ({ek_quote:.1f}%)")
-
-    # Age check
-    geb = kunde.get("personendaten", {}).get("geburtsdatum")
-    if geb:
-        try:
-            birth = datetime.fromisoformat(geb.replace("Z", ""))
-            age = (datetime.now() - birth).days // 365
-            if age < 18:
-                errors.append(f"Antragsteller unter 18 Jahre ({age})")
-            if age > 99:
-                errors.append(f"Alter über 99 Jahre ({age})")
-            if age > 75:
-                warnings.append(f"Antragsteller über 75 Jahre ({age})")
-        except (ValueError, TypeError):
-            pass
-
-    is_valid = len(errors) == 0
 
     return EuropaceResponse(
         case_id=request.case_id,
-        success=is_valid,
-        payload=cleaned_payload,
-        validation_errors=errors,
-        validation_warnings=warnings,
-        is_valid=is_valid
+        success=validation["is_valid"],
+        payload=build_result["payload"],
+        validation_errors=validation["errors"],
+        validation_warnings=validation["warnings"],
+        is_valid=validation["is_valid"],
     )
 
 

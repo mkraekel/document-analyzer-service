@@ -1,7 +1,10 @@
 """
 Import Builder
-Baut Europace-Payload, validiert und importiert Cases.
-Portiert aus dem n8n Import Builder Workflow.
+Baut Europace-Payload gemaess Kundenangaben API v1.0, validiert und importiert Cases.
+
+API Spec: https://developer.europace.de/api/baufismart-kundenangaben-api
+Server:   https://baufinanzierung.api.europace.de
+Endpoint: POST /kundenangaben
 """
 
 import json
@@ -19,43 +22,65 @@ from readiness import _compute_effective_view
 
 logger = logging.getLogger(__name__)
 
-EUROPACE_API_URL = os.getenv("EUROPACE_API_URL", "https://api.europace.de/kundenangaben")
+EUROPACE_API_URL = os.getenv(
+    "EUROPACE_API_URL",
+    "https://baufinanzierung.api.europace.de/kundenangaben",
+)
 EUROPACE_API_KEY = os.getenv("EUROPACE_API_KEY", "")
 
 # ============================================================
-# Europace Enum Mappings
+# Europace Enum Mappings (for @type discriminator fields)
 # ============================================================
-EUROPACE_ENUMS = {
-    "anrede": {"Herr": "HERR", "Frau": "FRAU"},
-    "familienstand": {
-        "ledig": "LEDIG",
-        "verheiratet": "VERHEIRATET",
-        "geschieden": "GESCHIEDEN",
-        "verwitwet": "VERWITWET",
-        "eingetragene Lebenspartnerschaft": "LEBENSPARTNERSCHAFT",
-    },
-    "objektart": {
-        "ETW": "EIGENTUMSWOHNUNG",
-        "EFH": "EINFAMILIENHAUS",
-        "DHH": "DOPPELHAUSHAELFTE",
-        "RH": "REIHENHAUS",
-        "MFH": "MEHRFAMILIENHAUS",
-        "Eigentumswohnung": "EIGENTUMSWOHNUNG",
-        "Einfamilienhaus": "EINFAMILIENHAUS",
-    },
-    "nutzungsart": {
-        "Eigennutzung": "EIGENGENUTZT",
-        "Kapitalanlage": "VERMIETET",
-        "Teilvermietet": "TEILWEISE_VERMIETET",
-    },
-    "beschaeftigungsart": {
-        "Angestellter": "ANGESTELLTER",
-        "Selbstständig": "SELBSTAENDIGER",
-        "Beamter": "BEAMTER",
-        "Rentner": "RENTNER",
-        "Sonstiges": "SONSTIGES",
-    },
+FAMILIENSTAND_MAP = {
+    "ledig": "LEDIG",
+    "verheiratet": "VERHEIRATET",
+    "geschieden": "GESCHIEDEN",
+    "verwitwet": "VERWITWET",
+    "getrennt lebend": "GETRENNT_LEBEND",
+    "eingetragene Lebenspartnerschaft": "LEBENSPARTNERSCHAFT",
 }
+
+BESCHAEFTIGUNG_MAP = {
+    "Angestellter": "ANGESTELLTER",
+    "Angestellte": "ANGESTELLTER",
+    "Arbeiter": "ARBEITER",
+    "Beamter": "BEAMTER",
+    "Beamtin": "BEAMTER",
+    "Selbstständig": "SELBSTSTAENDIGER",
+    "Selbständig": "SELBSTSTAENDIGER",
+    "Freiberufler": "FREIBERUFLER",
+    "Rentner": "RENTNER",
+    "Rentnerin": "RENTNER",
+    "Hausfrau": "HAUSHALTENDE_PERSON",
+    "Hausmann": "HAUSHALTENDE_PERSON",
+    "Arbeitslos": "ARBEITSLOSER",
+    "Sonstiges": "ANGESTELLTER",  # Fallback
+}
+
+OBJEKTART_MAP = {
+    "ETW": "EIGENTUMSWOHNUNG",
+    "EFH": "EINFAMILIENHAUS",
+    "DHH": "DOPPELHAUSHAELFTE",
+    "RH": "REIHENHAUS",
+    "MFH": "MEHRFAMILIENHAUS",
+    "ZFH": "ZWEIFAMILIENHAUS",
+    "Eigentumswohnung": "EIGENTUMSWOHNUNG",
+    "Einfamilienhaus": "EINFAMILIENHAUS",
+    "Doppelhaushälfte": "DOPPELHAUSHAELFTE",
+    "Reihenhaus": "REIHENHAUS",
+    "Mehrfamilienhaus": "MEHRFAMILIENHAUS",
+    "Zweifamilienhaus": "ZWEIFAMILIENHAUS",
+}
+
+NUTZUNGSART_MAP = {
+    "Eigennutzung": "EIGENGENUTZT",
+    "Eigengenutzt": "EIGENGENUTZT",
+    "Kapitalanlage": "VERMIETET",
+    "Vermietet": "VERMIETET",
+    "Teilvermietet": "TEILVERMIETET",
+}
+
+ANREDE_MAP = {"Herr": "HERR", "Frau": "FRAU"}
 
 
 # ============================================================
@@ -83,7 +108,7 @@ def _map_enum(value, enum_map: dict):
 
 
 def _clean_payload(obj):
-    """Entfernt None/leere Werte aus verschachteltem Dict."""
+    """Entfernt None/leere Werte aus verschachteltem Dict. Behaelt @type Felder."""
     if obj is None:
         return None
     if isinstance(obj, list):
@@ -94,7 +119,10 @@ def _clean_payload(obj):
         cleaned = {}
         for k, v in obj.items():
             cv = _clean_payload(v)
-            if cv is not None and cv != "" and cv != []:
+            # @type muss immer erhalten bleiben (Europace Discriminator)
+            if k == "@type" and isinstance(cv, str):
+                cleaned[k] = cv
+            elif cv is not None and cv != "" and cv != []:
                 cleaned[k] = cv
         return cleaned if cleaned else None
     return obj
@@ -183,8 +211,28 @@ def _get_value(effective_view: dict, primary: str, *fallbacks):
     return None
 
 
+def _safe_float(val) -> Optional[float]:
+    """Konvertiert zu float, gibt None bei Fehler."""
+    if val is None:
+        return None
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return None
+
+
+def _safe_int(val) -> Optional[int]:
+    """Konvertiert zu int, gibt None bei Fehler."""
+    if val is None:
+        return None
+    try:
+        return int(float(val))
+    except (ValueError, TypeError):
+        return None
+
+
 # ============================================================
-# Payload Builder
+# Payload Builder (Europace Kundenangaben API v1.0)
 # ============================================================
 
 def build_europace_payload(case_id: str) -> dict:
@@ -202,36 +250,61 @@ def build_europace_payload(case_id: str) -> dict:
         )
 
     view = _compute_effective_view(case)
-    view = _normalize_effective_view(view)  # DE → EN key translation
+    view = _normalize_effective_view(view)  # DE -> EN key translation
 
     def gv(primary, *fallbacks):
         return _get_value(view, primary, *fallbacks)
 
-    # Kunden-Objekt bauen
-    def _build_kunde(prefix: str, id_suffix: str) -> dict:
+    # ── Kunde bauen (Europace Kunde Schema) ──
+    def _build_kunde(prefix: str, ref_id: str) -> dict:
         p = f"{prefix}." if prefix else "applicant_data."
         p_alt = prefix.replace("applicant_data", "applicant") if prefix else "applicant"
 
-        return {
-            "externeKundenId": f"{case_id}{id_suffix}",
-            "personendaten": {
-                "anrede": _map_enum(
-                    gv(f"{p}salutation", f"{p_alt}_salutation"),
-                    EUROPACE_ENUMS["anrede"],
-                ),
-                "titel": gv(f"{p}title", f"{p_alt}_title"),
-                "vorname": gv(f"{p}first_name", f"{p_alt}_first_name"),
-                "nachname": gv(f"{p}last_name", f"{p_alt}_last_name"),
-                "geburtsdatum": gv(f"{p}birth_date", f"{p_alt}_birth_date"),
-                "geburtsort": gv(f"{p}birth_place", f"{p_alt}_birth_place"),
-                "staatsangehoerigkeit": gv(f"{p}nationality", f"{p_alt}_nationality") or "DE",
-                "steuerId": gv(f"{p}tax_id", f"{p_alt}_tax_id"),
-            },
-            "kontakt": {
-                "telefonPrivat": gv(f"{p}phone", f"{p_alt}_phone"),
-                "email": gv(f"{p}email", f"{p_alt}_email"),
-            },
-            "wohnsituation": None if prefix == "applicant_data_2" else {
+        # Personendaten.person (nested!)
+        anrede = _map_enum(gv(f"{p}salutation", f"{p_alt}_salutation"), ANREDE_MAP)
+        vorname = gv(f"{p}first_name", f"{p_alt}_first_name")
+        nachname = gv(f"{p}last_name", f"{p_alt}_last_name")
+
+        person = {
+            "anrede": anrede,
+            "vorname": vorname,
+            "nachname": nachname,
+        }
+
+        # Titel als Objekt: {"dr": true, "prof": true}
+        titel_raw = gv(f"{p}title", f"{p_alt}_title")
+        if titel_raw:
+            titel_lower = str(titel_raw).lower()
+            person["titel"] = {
+                "dr": "dr" in titel_lower,
+                "prof": "prof" in titel_lower,
+            }
+
+        # Familienstand als polymorphes Objekt mit @type
+        fam_raw = gv("household_data.marital_status")
+        fam_type = _map_enum(fam_raw, FAMILIENSTAND_MAP) if fam_raw else None
+        familienstand = {"@type": fam_type} if fam_type else None
+
+        personendaten = {
+            "person": person,
+            "geburtsdatum": gv(f"{p}birth_date", f"{p_alt}_birth_date"),
+            "geburtsort": gv(f"{p}birth_place", f"{p_alt}_birth_place"),
+            "staatsangehoerigkeit": gv(f"{p}nationality", f"{p_alt}_nationality") or "DE",
+            "familienstand": familienstand,
+        }
+
+        # Kontakt
+        kontakt = {
+            "email": gv(f"{p}email", f"{p_alt}_email"),
+        }
+        phone = gv(f"{p}phone", f"{p_alt}_phone")
+        if phone:
+            kontakt["telefonnummer"] = {"nummer": phone}
+
+        # Wohnsituation (nur fuer Hauptantragsteller)
+        wohnsituation = None
+        if prefix != "applicant_data_2":
+            wohnsituation = {
                 "anschrift": {
                     "strasse": gv("address_data.street"),
                     "hausnummer": gv("address_data.house_number"),
@@ -239,41 +312,79 @@ def build_europace_payload(case_id: str) -> dict:
                     "ort": gv("address_data.city"),
                 },
                 "wohnhaftSeit": gv("address_data.resident_since"),
-            },
-            "familienstand": {
-                "familienstand": _map_enum(
-                    gv("household_data.marital_status"),
-                    EUROPACE_ENUMS["familienstand"],
-                ),
-            },
-            "beschaeftigung": {
-                "beschaeftigungsverhaeltnis": {
-                    "beschaeftigungsart": _map_enum(
-                        gv(f"{p}employment_type", f"{p_alt}_employment_type"),
-                        EUROPACE_ENUMS["beschaeftigungsart"],
-                    ),
-                    "beruf": gv(f"{p}occupation", f"{p_alt}_occupation"),
-                    "arbeitgeber": {
-                        "name": gv(f"{p}employer", f"{p_alt}_employer"),
-                        "inDeutschland": gv(f"{p}employer_in_germany", f"{p_alt}_employer_in_germany") is not False,
-                    },
-                    "beschaeftigtSeit": gv(f"{p}employed_since", f"{p_alt}_employed_since"),
-                    "befristet": gv(f"{p}employment_status", f"{p_alt}_employment_status") == "befristet",
-                    "inProbezeit": gv(f"{p}probation", f"{p_alt}_probation") or False,
-                },
-            },
-            "einkommenNetto": {
-                "monatlichesNettoEinkommen": gv(
-                    f"{p}net_income", f"{p}monthly_income", f"{p_alt}_monthly_income"
-                ),
-                "anzahlGehaelterProJahr": gv(
-                    f"{p}salaries_per_year", f"{p_alt}_salaries_per_year"
-                ) or 12,
-                "monatlicheEinnahmenAusNebentaetigkeit": gv("monthly_rental_income") if id_suffix == "_1" else None,
-            },
+            }
+
+        # Finanzielles (Beschaeftigung + Einkommen)
+        beschaeftigung_raw = gv(f"{p}employment_type", f"{p_alt}_employment_type")
+        beschaeftigung_type = _map_enum(beschaeftigung_raw, BESCHAEFTIGUNG_MAP)
+
+        beschaeftigung = None
+        if beschaeftigung_type:
+            beschaeftigung = {"@type": beschaeftigung_type}
+
+            # Angestellter/Beamter: Beschaeftigungsverhaeltnis
+            if beschaeftigung_type in ("ANGESTELLTER", "ARBEITER", "BEAMTER"):
+                bv = {}
+                arbeitgeber_name = gv(f"{p}employer", f"{p_alt}_employer")
+                if arbeitgeber_name:
+                    bv["arbeitgeber"] = {
+                        "name": arbeitgeber_name,
+                        "inDeutschland": gv(f"{p}employer_in_germany") is not False,
+                    }
+                employed_since = gv(f"{p}employed_since", f"{p_alt}_employed_since")
+                if employed_since:
+                    bv["beschaeftigtSeit"] = employed_since
+
+                emp_status = gv(f"{p}employment_status", f"{p_alt}_employment_status")
+                if emp_status == "befristet":
+                    bv["beschaeftigungsstatus"] = "BEFRISTET"
+
+                probation = gv(f"{p}probation", f"{p_alt}_probation")
+                if probation:
+                    bv["probezeit"] = True
+
+                beschaeftigung["beschaeftigungsverhaeltnis"] = bv
+
+                beruf = gv(f"{p}occupation", f"{p_alt}_occupation")
+                if beruf:
+                    beschaeftigung["beruf"] = beruf
+
+            # Selbststaendiger/Freiberufler: taetigkeit
+            elif beschaeftigung_type in ("SELBSTSTAENDIGER", "FREIBERUFLER"):
+                taetigkeit = {}
+                taetig_seit = gv(f"{p}employed_since", f"{p_alt}_employed_since")
+                if taetig_seit:
+                    taetigkeit["taetigSeit"] = taetig_seit
+                firma = gv(f"{p}employer", f"{p_alt}_employer")
+                if firma:
+                    taetigkeit["firma"] = firma
+                if taetigkeit:
+                    beschaeftigung["taetigkeit"] = taetigkeit
+
+                beruf = gv(f"{p}occupation", f"{p_alt}_occupation")
+                if beruf:
+                    beschaeftigung["beruf"] = beruf
+
+        net_income = _safe_float(
+            gv(f"{p}net_income", f"{p}monthly_income", f"{p_alt}_monthly_income")
+        )
+
+        finanzielles = {
+            "beschaeftigung": beschaeftigung,
+            "einkommenNetto": net_income,
+            "steuerId": gv(f"{p}tax_id", f"{p_alt}_tax_id"),
         }
 
-    # Kunden-Array
+        return {
+            "referenzId": ref_id,
+            "externeKundenId": f"{case_id}{ref_id}",
+            "personendaten": personendaten,
+            "kontakt": kontakt,
+            "wohnsituation": wohnsituation,
+            "finanzielles": finanzielles,
+        }
+
+    # ── Kunden-Array ──
     kunde1 = _build_kunde("applicant_data", "_1")
     kunden = [kunde1]
 
@@ -284,72 +395,113 @@ def build_europace_payload(case_id: str) -> dict:
     )
     if is_couple:
         kunde2 = _build_kunde("applicant_data_2", "_2")
-        if (kunde2.get("personendaten") or {}).get("vorname") or (
-            kunde2.get("personendaten") or {}
-        ).get("nachname"):
+        pd2 = (kunde2.get("personendaten") or {}).get("person") or {}
+        if pd2.get("vorname") or pd2.get("nachname"):
             kunden.append(kunde2)
 
-    # Werte fuer Finanzierung
-    kaufpreis = gv("purchase_price", "property_data.purchase_price", "financing_data.purchase_price")
-    loan_amount = gv("loan_amount", "financing_data.loan_amount")
-    equity = gv("equity_to_use", "financing_data.equity_to_use", "equity")
+    # ── Finanzierungswerte ──
+    kaufpreis = _safe_float(
+        gv("purchase_price", "property_data.purchase_price", "financing_data.purchase_price")
+    )
+    loan_amount = _safe_float(gv("loan_amount", "financing_data.loan_amount"))
+    equity = _safe_float(gv("equity_to_use", "financing_data.equity_to_use", "equity"))
 
-    # Payload zusammenbauen
+    # ── Immobilie.typ als polymorphes Objekt ──
+    objektart_raw = gv("object_type", "property_data.object_type")
+    objektart_type = _map_enum(objektart_raw, OBJEKTART_MAP)
+    immobilie_typ = {"@type": objektart_type} if objektart_type else None
+
+    # Gebaeude mit Nutzung
+    nutzungsart_raw = gv("usage", "property_data.usage")
+    nutzungsart_type = _map_enum(nutzungsart_raw, NUTZUNGSART_MAP)
+
+    wohnflaeche = _safe_float(gv("property_data.living_space", "living_space"))
+    baujahr = _safe_int(gv("property_data.year_built", "year_built"))
+
+    gebaeude = {}
+    if baujahr:
+        gebaeude["baujahr"] = baujahr
+    if nutzungsart_type or wohnflaeche:
+        nutzung_wohnen = {}
+        if nutzungsart_type:
+            nutzung_wohnen["nutzungsart"] = {"@type": nutzungsart_type}
+        if wohnflaeche:
+            nutzung_wohnen["gesamtflaeche"] = wohnflaeche
+        gebaeude["nutzung"] = {"wohnen": nutzung_wohnen}
+
+    # Immobilie-Objekt
+    immobilie = {
+        "typ": immobilie_typ,
+        "adresse": {
+            "strasse": gv("property_data.street", "property_data.strasse", "property_street"),
+            "hausnummer": gv("property_data.house_number", "property_house_number"),
+            "plz": gv("property_data.zip", "property_data.plz", "property_zip"),
+            "ort": gv("property_data.city", "property_data.ort", "property_city"),
+        },
+    }
+
+    # Gebaeude nur setzen wenn Inhalt vorhanden
+    # Immobilientyp-spezifische Felder kommen ins typ-Objekt
+    if immobilie_typ and gebaeude:
+        immobilie_typ["gebaeude"] = gebaeude
+
+    # ── Finanzierungsbedarf mit Finanzierungszweck ──
+    finanzierungszweck = None
+    if kaufpreis:
+        finanzierungszweck = {
+            "@type": "KAUF",
+            "kaufpreis": kaufpreis,
+        }
+
+    finanzierungsbedarf = {}
+    if finanzierungszweck:
+        finanzierungsbedarf["finanzierungszweck"] = finanzierungszweck
+
+    # Eigenkapital als Vermoegen im Haushalt
+    haushalt_vermoegen = None
+    if equity and equity > 0:
+        haushalt_vermoegen = {
+            "summeBankUndSparguthaben": equity,
+        }
+
+    # ── Partner-ID (Betreuung) ──
+    partner_id = gv("partnerId")
+
+    # ── Gesamter Payload (ImportKundenangabenRequest) ──
     payload = {
+        "importMetadaten": {
+            "datenkontext": "ECHT_GESCHAEFT",
+            "externeVorgangsId": case_id,
+            "importquelle": "Alexander Heil Finanzierung Automation",
+        },
         "kundenangaben": {
             "haushalte": [
                 {
                     "kunden": kunden,
                     "finanzielleSituation": {
-                        "vermoegen": {
-                            "summeBankUndSparguthaben": gv("assets.bank_savings", "bank_savings"),
-                            "summeBausparvertraege": gv("assets.bauspar", "bauspar"),
-                        }
-                    },
-                    "finanzbedarf": {
-                        "fahrzeuge": {
-                            "anzahlPKWGesamt": gv(
-                                "household_data.cars_in_household", "cars_in_household"
-                            )
-                            or 0
-                        }
-                    },
+                        "vermoegen": haushalt_vermoegen,
+                    } if haushalt_vermoegen else None,
                 }
             ],
             "finanzierungsobjekt": {
-                "immobilie": {
-                    "objektart": _map_enum(
-                        gv("object_type", "property_data.object_type"),
-                        EUROPACE_ENUMS["objektart"],
-                    ),
-                    "nutzungsart": _map_enum(
-                        gv("usage", "property_data.usage"),
-                        EUROPACE_ENUMS["nutzungsart"],
-                    ),
-                    "adresse": {
-                        "strasse": gv("property_data.street", "property_data.strasse", "property_data.address.Straße", "property_data.address.Strasse", "property_street"),
-                        "hausnummer": gv("property_data.house_number", "property_data.address.Hausnummer", "property_house_number"),
-                        "plz": gv("property_data.zip", "property_data.plz", "property_data.address.PLZ", "property_zip"),
-                        "ort": gv("property_data.city", "property_data.ort", "property_data.address.Ort", "property_data.address.Stadt", "property_city"),
-                    },
-                    "wohnflaeche": gv("property_data.living_space", "living_space"),
-                    "baujahr": gv("property_data.year_built", "year_built"),
-                    "kaufpreis": kaufpreis,
-                    "marktwert": gv("property_data.market_value", "market_value") or kaufpreis,
-                }
+                "immobilie": immobilie,
             },
-            "finanzierungswunsch": {
-                "darlehenssumme": loan_amount,
-                "eigenkapital": equity,
-                "zinsbindungInJahren": gv("zinsbindung") or 10,
-                "wunschrate": gv("wunschrate"),
-            },
-        },
-        "bearbeiter": {
-            "partnerId": gv("partnerId"),
-            "tippgeberPartnerId": gv("tippgeberPartnerId"),
+            "finanzierungsbedarf": finanzierungsbedarf if finanzierungsbedarf else None,
         },
     }
+
+    # Betreuung: Partner-ID als Kundenbetreuer
+    if partner_id:
+        payload["importMetadaten"]["betreuung"] = {
+            "kundenbetreuer": partner_id,
+        }
+
+    # Tippgeber
+    tippgeber_id = gv("tippgeberPartnerId")
+    if tippgeber_id:
+        payload["importMetadaten"]["tippgeber"] = {
+            "tippgeberPartnerId": tippgeber_id,
+        }
 
     cleaned = _clean_payload(payload)
 
@@ -374,13 +526,19 @@ def validate_payload(payload: dict, effective_view: dict) -> dict:
     current_year = datetime.now().year
 
     kundenangaben = (payload or {}).get("kundenangaben", {})
+    import_meta = (payload or {}).get("importMetadaten", {})
     haushalte = (kundenangaben.get("haushalte") or [{}])[0] if kundenangaben.get("haushalte") else {}
     kunden_list = haushalte.get("kunden", [{}]) if haushalte else [{}]
     kunde = kunden_list[0] if kunden_list else {}
     immobilie = kundenangaben.get("finanzierungsobjekt", {}).get("immobilie", {})
-    finanzierungswunsch = kundenangaben.get("finanzierungswunsch", {})
+    finanzierungsbedarf = kundenangaben.get("finanzierungsbedarf", {})
+    finanzierungszweck = finanzierungsbedarf.get("finanzierungszweck", {})
 
     # ── 1. Strukturelle Validierung (Pflichtfelder) ──
+    if not import_meta:
+        errors.append("Struktur: importMetadaten fehlt")
+    if not import_meta.get("datenkontext"):
+        errors.append("Pflichtfeld: importMetadaten.datenkontext fehlt")
     if not kundenangaben:
         errors.append("Struktur: kundenangaben fehlt")
     if not haushalte:
@@ -388,41 +546,32 @@ def validate_payload(payload: dict, effective_view: dict) -> dict:
     if not kunde:
         errors.append("Struktur: kunden[0] fehlt")
 
-    if not (kunde.get("personendaten") or {}).get("vorname"):
+    # referenzId ist required auf Kunde
+    if not kunde.get("referenzId"):
+        errors.append("Pflichtfeld: Kunde.referenzId fehlt")
+
+    person = (kunde.get("personendaten") or {}).get("person") or {}
+    if not person.get("vorname"):
         errors.append("Pflichtfeld: Vorname fehlt")
-    if not (kunde.get("personendaten") or {}).get("nachname"):
+    if not person.get("nachname"):
         errors.append("Pflichtfeld: Nachname fehlt")
 
-    if not immobilie.get("objektart"):
-        errors.append("Pflichtfeld: Objektart fehlt")
-    if not immobilie.get("nutzungsart"):
-        errors.append("Pflichtfeld: Nutzungsart fehlt")
-    if not immobilie.get("kaufpreis") and not immobilie.get("marktwert"):
-        errors.append("Pflichtfeld: Kaufpreis/Marktwert fehlt")
+    imm_typ = immobilie.get("typ") or {}
+    if not imm_typ.get("@type"):
+        errors.append("Pflichtfeld: Immobilie.typ fehlt (Objektart)")
 
-    if not finanzierungswunsch.get("darlehenssumme"):
-        errors.append("Pflichtfeld: Darlehenssumme fehlt")
-    if finanzierungswunsch.get("eigenkapital") is None:
-        errors.append("Pflichtfeld: Eigenkapital fehlt")
+    kaufpreis = finanzierungszweck.get("kaufpreis") or 0
+    if not kaufpreis:
+        errors.append("Pflichtfeld: Kaufpreis fehlt")
 
     # ── 2. Wertbereichs-Checks ──
-    kaufpreis = immobilie.get("kaufpreis") or immobilie.get("marktwert") or 0
-    darlehenssumme = finanzierungswunsch.get("darlehenssumme") or 0
-    eigenkapital = finanzierungswunsch.get("eigenkapital") or 0
-    wohnflaeche = immobilie.get("wohnflaeche")
-    baujahr = immobilie.get("baujahr")
-
     if kaufpreis > 0:
         if kaufpreis < 30000:
             errors.append(f"Plausibilitaet: Kaufpreis zu niedrig ({kaufpreis:,.0f} EUR) - Minimum 30.000 EUR")
         if kaufpreis > 10_000_000:
             errors.append(f"Plausibilitaet: Kaufpreis zu hoch ({kaufpreis:,.0f} EUR) - Maximum 10.000.000 EUR")
 
-    if darlehenssumme > 0:
-        if darlehenssumme < 10000:
-            errors.append(f"Plausibilitaet: Darlehenssumme zu niedrig ({darlehenssumme:,.0f} EUR) - Minimum 10.000 EUR")
-        if darlehenssumme > 10_000_000:
-            errors.append(f"Plausibilitaet: Darlehenssumme zu hoch ({darlehenssumme:,.0f} EUR) - Maximum 10.000.000 EUR")
+    eigenkapital = ((haushalte.get("finanzielleSituation") or {}).get("vermoegen") or {}).get("summeBankUndSparguthaben") or 0
 
     if eigenkapital < 0:
         errors.append(f"Plausibilitaet: Eigenkapital kann nicht negativ sein ({eigenkapital:,.0f} EUR)")
@@ -430,6 +579,12 @@ def validate_payload(payload: dict, effective_view: dict) -> dict:
         errors.append(
             f"Plausibilitaet: Eigenkapital ({eigenkapital:,.0f} EUR) > 150% des Kaufpreises ({kaufpreis:,.0f} EUR)"
         )
+
+    # Wohnflaeche/Baujahr aus Immobilientyp.gebaeude
+    gebaeude = imm_typ.get("gebaeude") or {}
+    wohnflaeche_obj = (gebaeude.get("nutzung") or {}).get("wohnen") or {}
+    wohnflaeche = wohnflaeche_obj.get("gesamtflaeche")
+    baujahr = gebaeude.get("baujahr")
 
     if wohnflaeche is not None:
         if wohnflaeche < 15:
@@ -446,22 +601,6 @@ def validate_payload(payload: dict, effective_view: dict) -> dict:
     # ── 3. Verhaeltniss-Checks (Financial Logic) ──
     geschaetzte_nebenkosten = kaufpreis * 0.12
     gesamtkosten = kaufpreis + geschaetzte_nebenkosten
-
-    if kaufpreis > 0 and darlehenssumme > 0:
-        if darlehenssumme > kaufpreis * 1.2:
-            warnings.append(
-                f"Plausibilitaet: Darlehenssumme ({darlehenssumme:,.0f} EUR) > 120% des Kaufpreises - Vollfinanzierung plus Nebenkosten?"
-            )
-        benoetigt = gesamtkosten - eigenkapital
-        if darlehenssumme < benoetigt * 0.7 and eigenkapital < kaufpreis * 0.5:
-            warnings.append(
-                f"Plausibilitaet: Darlehenssumme ({darlehenssumme:,.0f} EUR) koennte zu niedrig sein - geschaetzt benoetigt: {benoetigt:,.0f} EUR"
-            )
-
-    if kaufpreis > 0:
-        ek_quote = (eigenkapital / kaufpreis) * 100
-        if ek_quote < 5 and eigenkapital > 0:
-            warnings.append(f"Plausibilitaet: Eigenkapitalquote sehr niedrig ({ek_quote:.1f}%) - unter 5% unueblich")
 
     # ── 4. Personen-Checks ──
     geburtsdatum = (kunde.get("personendaten") or {}).get("geburtsdatum")
@@ -481,7 +620,7 @@ def validate_payload(payload: dict, effective_view: dict) -> dict:
         except (ValueError, TypeError):
             pass
 
-    netto_einkommen = (kunde.get("einkommenNetto") or {}).get("monatlichesNettoEinkommen")
+    netto_einkommen = (kunde.get("finanzielles") or {}).get("einkommenNetto")
     if netto_einkommen is not None:
         if netto_einkommen < 0:
             errors.append(f"Plausibilitaet: Nettoeinkommen kann nicht negativ sein ({netto_einkommen} EUR)")
@@ -502,10 +641,10 @@ def validate_payload(payload: dict, effective_view: dict) -> dict:
     # ── 6. Zweiter Antragsteller ──
     if len(kunden_list) > 1:
         kunde2 = kunden_list[1]
-        pd2 = kunde2.get("personendaten") or {}
+        pd2 = (kunde2.get("personendaten") or {}).get("person") or {}
         if not pd2.get("vorname") and not pd2.get("nachname"):
             warnings.append("Zweiter Antragsteller ohne Namen angegeben")
-        geb2 = pd2.get("geburtsdatum")
+        geb2 = (kunde2.get("personendaten") or {}).get("geburtsdatum")
         if geb2:
             try:
                 bd2 = datetime.fromisoformat(str(geb2).replace("Z", ""))
@@ -521,7 +660,6 @@ def validate_payload(payload: dict, effective_view: dict) -> dict:
         "errors_count": len(errors),
         "warnings_count": len(warnings),
         "kaufpreis": kaufpreis,
-        "darlehenssumme": darlehenssumme,
         "eigenkapital": eigenkapital,
         "geschaetzte_nebenkosten": round(geschaetzte_nebenkosten),
         "geschaetztes_gesamtvolumen": round(gesamtkosten),
@@ -616,8 +754,8 @@ def execute_import(case_id: str, dry_run: bool = False) -> dict:
     status_code = api_response.get("_status_code", 0)
 
     if status_code < 300:
-        # Erfolg
-        europace_case_id = api_response.get("vorgangId") or api_response.get("id") or ""
+        # Erfolg — Response enthaelt "vorgangsnummer"
+        europace_case_id = api_response.get("vorgangsnummer") or ""
         result["success"] = True
         result["europace_case_id"] = europace_case_id
 
@@ -656,8 +794,8 @@ def _call_europace_api(payload: dict) -> dict:
     """Ruft die Europace API synchron auf. Gibt Response als dict zurueck."""
     headers = {
         "Authorization": f"Bearer {EUROPACE_API_KEY}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
+        "Content-Type": "application/json;version=1.0",
+        "Accept": "application/json;version=1.0",
     }
 
     with httpx.Client(timeout=30.0) as client:
