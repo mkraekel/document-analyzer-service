@@ -106,7 +106,7 @@ if not api_key:
     client = None
 else:
     logger.info("OpenAI client initialized")
-    client = OpenAI(api_key=api_key)
+    client = OpenAI(api_key=api_key, timeout=60.0)
 
 # Dokument-Typen für Klassifizierung
 DOC_TYPES = [
@@ -680,7 +680,7 @@ def compute_effective_view(case_data: dict) -> dict:
         if isinstance(val, str):
             try:
                 return json.loads(val)
-            except:
+            except (json.JSONDecodeError, TypeError, ValueError):
                 return {}
         return {}
 
@@ -1154,7 +1154,7 @@ async def build_europace_payload(request: EuropaceRequest):
                 errors.append(f"Alter über 99 Jahre ({age})")
             if age > 75:
                 warnings.append(f"Antragsteller über 75 Jahre ({age})")
-        except:
+        except (ValueError, TypeError):
             pass
 
     is_valid = len(errors) == 0
@@ -1696,7 +1696,7 @@ async def compose_notification(request: NotificationRequest):
             try:
                 val = float(ctx[key])
                 ctx[key] = f"{val:,.0f} €".replace(",", ".")
-            except:
+            except (ValueError, TypeError):
                 pass
 
     try:
@@ -1896,7 +1896,7 @@ async def validate_data(request: ValidationRequest):
                     errors.append({"field": key, "message": f"Antragsteller muss mindestens {rule['min_age']} Jahre alt sein", "value": f"{age} Jahre"})
                 elif age > rule["max_age"]:
                     errors.append({"field": key, "message": f"Alter über {rule['max_age']} Jahre", "value": f"{age} Jahre"})
-            except:
+            except (ValueError, TypeError):
                 warnings.append({"field": key, "message": "Datumsformat nicht erkannt", "value": value})
 
         # Numeric range validations
@@ -1908,7 +1908,7 @@ async def validate_data(request: ValidationRequest):
                     errors.append({"field": key, "message": rule["message"], "value": val})
                 elif val > rule["max"]:
                     errors.append({"field": key, "message": rule["message"], "value": val})
-            except:
+            except (ValueError, TypeError):
                 warnings.append({"field": key, "message": "Keine gültige Zahl", "value": value})
 
         if key in ["loan_amount", "darlehenssumme"] and value:
@@ -1919,7 +1919,7 @@ async def validate_data(request: ValidationRequest):
                     errors.append({"field": key, "message": rule["message"], "value": val})
                 elif val > rule["max"]:
                     errors.append({"field": key, "message": rule["message"], "value": val})
-            except:
+            except (ValueError, TypeError):
                 warnings.append({"field": key, "message": "Keine gültige Zahl", "value": value})
 
         if key in ["equity", "equity_to_use", "eigenkapital"] and value:
@@ -1927,7 +1927,7 @@ async def validate_data(request: ValidationRequest):
                 val = float(value)
                 if val < 0:
                     errors.append({"field": key, "message": "Eigenkapital kann nicht negativ sein", "value": val})
-            except:
+            except (ValueError, TypeError):
                 warnings.append({"field": key, "message": "Keine gültige Zahl", "value": value})
 
         if key in ["living_space", "wohnflaeche"] and value:
@@ -1938,7 +1938,7 @@ async def validate_data(request: ValidationRequest):
                     warnings.append({"field": key, "message": f"Wohnfläche unter {rule['min']} m² unüblich", "value": val})
                 elif val > rule["max"]:
                     errors.append({"field": key, "message": rule["message"], "value": val})
-            except:
+            except (ValueError, TypeError):
                 pass
 
         if key in ["year_built", "baujahr"] and value:
@@ -1950,7 +1950,7 @@ async def validate_data(request: ValidationRequest):
                     errors.append({"field": key, "message": f"Baujahr vor {rule['min']} ungültig", "value": val})
                 elif val > max_year:
                     errors.append({"field": key, "message": "Baujahr in der Zukunft", "value": val})
-            except:
+            except (ValueError, TypeError):
                 pass
 
     # Cross-field validation
@@ -1966,7 +1966,7 @@ async def validate_data(request: ValidationRequest):
                     "message": "Eigenkapital > 150% des Kaufpreises",
                     "value": f"{equity} vs {purchase_price}"
                 })
-        except:
+        except (ValueError, TypeError):
             pass
 
     if purchase_price and loan_amount:
@@ -1977,7 +1977,7 @@ async def validate_data(request: ValidationRequest):
                     "message": "Darlehenssumme > 120% des Kaufpreises (Vollfinanzierung?)",
                     "value": f"{loan_amount} vs {purchase_price}"
                 })
-        except:
+        except (ValueError, TypeError):
             pass
 
     # If strict mode, warnings become errors
@@ -2115,7 +2115,7 @@ async def process_email(request: ProcessEmailRequest):
     except Exception as e:
         tb = traceback.format_exc()
         logger.error(f"process-email unhandled error: {tb}")
-        raise HTTPException(status_code=500, detail={"error": str(e), "traceback": tb})
+        raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
 async def _process_gdrive_async(case_id: str, links: list):
@@ -2161,9 +2161,9 @@ def _safe_partner_email(extracted_email: str | None, fallback_email: str) -> str
 def _process_email_impl(request: ProcessEmailRequest):
     """Synchronous implementation - runs in thread pool via asyncio.to_thread."""
 
-    # 1. Dedup-Check
-    if db.is_email_processed(request.provider_message_id):
-        logger.info(f"E-Mail bereits verarbeitet: {request.provider_message_id}")
+    # 1. Atomic Dedup-Lock (prevents race condition with parallel requests)
+    if not db.try_lock_email(request.provider_message_id):
+        logger.info(f"E-Mail bereits verarbeitet/gesperrt: {request.provider_message_id}")
         return {"action": "skipped", "reason": "already_processed"}
 
     # 2. Gatekeeper

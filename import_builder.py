@@ -478,7 +478,7 @@ def validate_payload(payload: dict, effective_view: dict) -> dict:
                 warnings.append(f"Plausibilitaet: Antragsteller ueber 75 Jahre ({age} Jahre) - Finanzierung ggf. eingeschraenkt")
             if birth_date > today:
                 errors.append(f"Plausibilitaet: Geburtsdatum liegt in der Zukunft ({geburtsdatum})")
-        except Exception:
+        except (ValueError, TypeError):
             pass
 
     netto_einkommen = (kunde.get("einkommenNetto") or {}).get("monatlichesNettoEinkommen")
@@ -514,7 +514,7 @@ def validate_payload(payload: dict, effective_view: dict) -> dict:
                     errors.append(f"Plausibilitaet: Zweiter Antragsteller unter 18 Jahre ({age2} Jahre)")
                 if age2 > 99:
                     errors.append(f"Plausibilitaet: Zweiter Antragsteller ueber 99 Jahre ({age2} Jahre)")
-            except Exception:
+            except (ValueError, TypeError):
                 pass
 
     summary = {

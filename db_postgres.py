@@ -423,6 +423,23 @@ def is_email_processed(provider_message_id: str) -> bool:
         return False
 
 
+def try_lock_email(provider_message_id: str) -> bool:
+    """Atomically lock an email for processing. Returns True if lock acquired, False if already exists."""
+    try:
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO processed_emails (_id, provider_message_id, processing_result)
+                       VALUES (%s, %s, 'lock')
+                       ON CONFLICT (provider_message_id) DO NOTHING""",
+                    (_new_id(), provider_message_id),
+                )
+                return cur.rowcount > 0
+    except Exception as e:
+        logger.error(f"PG try_lock_email failed: {e}")
+        return False
+
+
 def log_processed_email(
     provider_message_id: str,
     intent: str,

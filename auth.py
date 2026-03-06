@@ -88,7 +88,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
         # X-API-Key pruefen (fuer n8n und externe Services)
         api_key = request.headers.get("x-api-key", "")
         if api_key:
-            logger.info(f"[AUTH] X-API-Key received for {path} (key_len={len(api_key)}, expected_len={len(_N8N_API_KEY)}, match={api_key == _N8N_API_KEY})")
+            logger.info(f"[AUTH] X-API-Key received for {path} (valid={'yes' if api_key == _N8N_API_KEY else 'no'})")
         if api_key and _N8N_API_KEY and api_key == _N8N_API_KEY:
             request.state.user = "n8n"
             return await call_next(request)
