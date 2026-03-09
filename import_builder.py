@@ -725,6 +725,41 @@ def build_finlink_payload(case_id: str, effective_view: dict) -> dict:
     return _clean_payload(payload)
 
 
+def create_finlink_lead(case_id: str, facts: dict, applicant_name: str = "", partner_email: str = ""):
+    """
+    Erstellt einen Finlink Lead direkt bei Case-Erstellung.
+    Wird als Background-Task aufgerufen, daher eigenes Error-Handling.
+    facts = die initialen facts_extracted aus der E-Mail-Analyse.
+    """
+    if not FINLINK_API_KEY:
+        logger.info(f"[Finlink] API Key nicht konfiguriert – Lead fuer {case_id} uebersprungen")
+        return
+
+    # Minimalen effective_view aus den initialen Facts bauen
+    # (Bei Case-Erstellung haben wir noch keine Dokumente/Overrides)
+    view = dict(facts or {})
+    if applicant_name:
+        view["applicant_name"] = applicant_name
+    if partner_email:
+        view["partner_email"] = partner_email
+
+    try:
+        view = _normalize_effective_view(view)
+        payload = build_finlink_payload(case_id, view)
+        response = _call_finlink_api(payload)
+        finlink_lead_id = response.get("id") or ""
+        logger.info(f"[Finlink] Lead erstellt fuer {case_id}: {finlink_lead_id}")
+
+        # finlink_lead_id in DB speichern
+        case = cases.load_case(case_id)
+        if case:
+            db.update_row("fin_cases", case["_id"], {
+                "finlink_lead_id": finlink_lead_id,
+            })
+    except Exception as e:
+        logger.error(f"[Finlink] Lead-Erstellung fehlgeschlagen fuer {case_id}: {e}")
+
+
 # ============================================================
 # Payload Validator
 # ============================================================
@@ -921,13 +956,15 @@ def execute_import(case_id: str, dry_run: bool = False) -> dict:
 
     result["payload_preview"] = payload
 
+    # Finlink-ID aus DB mitlesen (wurde bei Case-Erstellung gesetzt)
+    result["finlink_lead_id"] = case.get("finlink_lead_id") or None
+
     # 2. Validieren
     validation = validate_payload(payload, effective_view)
     result["errors"].extend(validation["errors"])
     result["warnings"].extend(validation["warnings"])
 
     if not validation["is_valid"]:
-        # Validierungsfehler -> Status ERROR + Fehler speichern
         _update_case_error(case, {
             "validation_errors": validation["errors"],
             "validation_warnings": validation["warnings"],
@@ -950,87 +987,54 @@ def execute_import(case_id: str, dry_run: bool = False) -> dict:
         return result
 
     # 4. Europace API aufrufen
-    europace_ok = False
     if not EUROPACE_API_KEY:
         result["errors"].append("EUROPACE_API_KEY nicht konfiguriert")
-    else:
-        try:
-            api_response = _call_europace_api(payload)
-            status_code = api_response.get("_status_code", 0)
+        _update_case_error(case, {"error": "EUROPACE_API_KEY nicht konfiguriert"})
+        return result
 
-            if status_code < 300:
-                europace_case_id = api_response.get("vorgangsnummer") or ""
-                result["europace_case_id"] = europace_case_id
-                europace_ok = True
-                logger.info(f"Case {case_id} imported to Europace: {europace_case_id}")
-            else:
-                error_body = json.dumps(api_response, ensure_ascii=False)
-                result["errors"].append(f"Europace API HTTP {status_code}: {error_body[:500]}")
-                logger.error(f"Europace API returned {status_code} for {case_id}")
-        except Exception as e:
-            error_msg = f"Europace API Fehler: {str(e)}"
-            result["errors"].append(error_msg)
-            logger.error(f"Europace API call failed for {case_id}: {e}")
+    try:
+        api_response = _call_europace_api(payload)
+    except Exception as e:
+        error_msg = f"Europace API Fehler: {str(e)}"
+        result["errors"].append(error_msg)
+        _update_case_error(case, {"error": True, "message": error_msg})
+        logger.error(f"Europace API call failed for {case_id}: {e}")
+        return result
 
-    # 5. Finlink Lead erstellen
-    finlink_ok = False
-    if not FINLINK_API_KEY:
-        result["warnings"].append("FINLINK_API_KEY nicht konfiguriert – Finlink uebersprungen")
-    else:
-        try:
-            finlink_payload = build_finlink_payload(case_id, effective_view)
-            finlink_response = _call_finlink_api(finlink_payload)
-            finlink_lead_id = finlink_response.get("id") or ""
-            result["finlink_lead_id"] = finlink_lead_id
-            finlink_ok = True
-            logger.info(f"Case {case_id} created as Finlink lead: {finlink_lead_id}")
-        except Exception as e:
-            error_msg = f"Finlink API Fehler: {str(e)}"
-            result["warnings"].append(error_msg)
-            logger.error(f"Finlink API call failed for {case_id}: {e}")
+    # 5. API-Antwort auswerten
+    status_code = api_response.get("_status_code", 0)
 
-    # 6. DB updaten basierend auf Ergebnis
-    now = datetime.utcnow().isoformat()
-    audit = case.get("_audit_log", [])
+    if status_code < 300:
+        europace_case_id = api_response.get("vorgangsnummer") or ""
+        result["success"] = True
+        result["europace_case_id"] = europace_case_id
 
-    if europace_ok:
+        now = datetime.utcnow().isoformat()
+        audit = case.get("_audit_log", [])
         audit.append({
             "event": "imported_to_europace",
             "ts": now,
-            "europace_case_id": result["europace_case_id"],
+            "europace_case_id": europace_case_id,
         })
+        audit = audit[-100:]
 
-    if finlink_ok:
-        audit.append({
-            "event": "imported_to_finlink",
-            "ts": now,
-            "finlink_lead_id": result["finlink_lead_id"],
-        })
-
-    audit = audit[-100:]
-
-    if europace_ok:
-        result["success"] = True
-        update_data = {
+        db.update_row("fin_cases", case["_id"], {
             "status": "IMPORTED",
-            "europace_case_id": result["europace_case_id"],
             "europace_response": json.dumps(api_response, ensure_ascii=False),
+            "europace_case_id": europace_case_id,
             "last_status_change": now,
             "audit_log": json.dumps(audit),
-        }
-        if finlink_ok:
-            update_data["finlink_lead_id"] = result["finlink_lead_id"]
-        db.update_row("fin_cases", case["_id"], update_data)
-    elif finlink_ok:
-        # Nur Finlink ok, Europace fehlgeschlagen
-        result["success"] = False
-        db.update_row("fin_cases", case["_id"], {
-            "finlink_lead_id": result["finlink_lead_id"],
-            "audit_log": json.dumps(audit),
         })
+        logger.info(f"Case {case_id} imported to Europace: {europace_case_id}")
     else:
-        # Beides fehlgeschlagen
-        _update_case_error(case, {"error": True, "message": "Import fehlgeschlagen (Europace + Finlink)"})
+        error_body = json.dumps(api_response, ensure_ascii=False)
+        result["errors"].append(f"Europace API HTTP {status_code}: {error_body[:500]}")
+        _update_case_error(case, {
+            "error": True,
+            "statusCode": status_code,
+            "body": api_response,
+        })
+        logger.error(f"Europace API returned {status_code} for {case_id}")
 
     return result
 

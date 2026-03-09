@@ -2057,16 +2057,25 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
                 "equity_to_use": parsed.get("equity_to_use"),
             },
         }
+        partner_email_for_case = _safe_partner_email(parsed.get("partner_email"), request.from_email)
         cases.create_case(
             case_id=case_id,
             applicant_name=applicant_name,
-            partner_email=_safe_partner_email(parsed.get("partner_email"), request.from_email),
+            partner_email=partner_email_for_case,
             partner_phone="",
             conversation_id=request.conversation_id,
             facts=facts,
             partner_name=request.from_name or "",
         )
         needs_folder = True  # n8n soll OneDrive-Ordner erstellen
+
+        # Finlink Lead im Hintergrund erstellen
+        import import_builder
+        asyncio.get_event_loop().run_in_executor(
+            None,
+            import_builder.create_finlink_lead,
+            case_id, facts, applicant_name, partner_email_for_case,
+        )
 
     elif match["action"] == "update":
         cases.update_case_conversation(case_id, request.conversation_id)
