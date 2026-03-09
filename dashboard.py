@@ -216,6 +216,7 @@ async def dashboard_case_detail(case_id: str):
                 "processing_status": d.get("processing_status"),
                 "processed_at": d.get("processed_at"),
                 "extracted_fields": list(extracted.keys()) if extracted else [],
+                "extracted_data": extracted or {},
                 "gdrive_file_id": gdrive_id,
                 "gdrive_url": f"https://drive.google.com/file/d/{gdrive_id}/view" if gdrive_id else "",
                 "onedrive_url": onedrive_url,
