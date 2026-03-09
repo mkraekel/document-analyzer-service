@@ -533,9 +533,9 @@ def check_readiness(case_id: str) -> dict:
 
         fresh_docs = [d for d in docs if accept_stale or _doc_age_ok(d, max_age)]
 
-        # Kontoauszug: months_covered zählen statt Datei-Anzahl
-        # Ein PDF kann mehrere Monate abdecken (z.B. Quartal = 3 Monate)
-        if doc_type == "Kontoauszug":
+        # Kontoauszug + Gehaltsnachweis: months_covered zählen statt Datei-Anzahl
+        # Ein PDF kann mehrere Monate abdecken (z.B. 3 Gehaltsabrechnungen in einer PDF)
+        if doc_type in ("Kontoauszug", "Gehaltsnachweis"):
             effective_count = 0
             for doc in fresh_docs:
                 ext = doc.get("extracted") or {}

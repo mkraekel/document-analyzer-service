@@ -173,7 +173,9 @@ Für Gehaltsnachweise (inkl. Entgeltnachweis, Gehaltsabrechnung):
 - Strasse, Hausnummer, PLZ, Ort (Wohnadresse des Arbeitnehmers, falls angegeben)
 - Arbeitgeber, Brutto, Netto, Auszahlungsbetrag, Monat/Jahr
 - Steuerklasse, Sozialversicherungsbeiträge
+- months_covered (Anzahl der enthaltenen Monate/Abrechnungen als Zahl, z.B. 1 wenn nur ein Monat, 3 wenn 3 separate Gehaltsabrechnungen in einem PDF)
 - WICHTIG: "Netto" ist das steuerliche Netto VOR Abzügen (VWL, Kirchensteuer, etc.). "Auszahlungsbetrag" ist der tatsächlich ausgezahlte Betrag. Beide Werte extrahieren wenn vorhanden!
+- WICHTIG: Wenn das PDF MEHRERE Gehaltsabrechnungen enthält (z.B. 3 Monate), extrahiere die Daten der NEUESTEN Abrechnung, aber setze months_covered auf die Gesamtzahl!
 
 Für Kontoauszüge:
 - Bank, IBAN, Kontostand, Zeitraum
