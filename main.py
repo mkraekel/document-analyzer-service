@@ -173,13 +173,13 @@ Für Gehaltsnachweise (inkl. Entgeltnachweis, Gehaltsabrechnung):
 - Strasse, Hausnummer, PLZ, Ort (Wohnadresse des Arbeitnehmers, falls angegeben)
 - Arbeitgeber, Brutto, Netto, Auszahlungsbetrag, Monat/Jahr
 - Steuerklasse, Sozialversicherungsbeiträge
-- months_covered (Anzahl der enthaltenen Monate/Abrechnungen als Zahl, z.B. 1 wenn nur ein Monat, 3 wenn 3 separate Gehaltsabrechnungen in einem PDF)
+- months_covered (PFLICHT! Zähle wie viele SEPARATE Gehaltsabrechnungen/Monate in diesem Dokument enthalten sind. Zähle die Anzahl der "Abrechnung der Brutto/Netto-Bezüge" Abschnitte bzw. verschiedene Monat/Jahr-Angaben. Ein PDF mit 3 Seiten für Nov, Dez, Jan = months_covered: 3)
 - WICHTIG: "Netto" ist das steuerliche Netto VOR Abzügen (VWL, Kirchensteuer, etc.). "Auszahlungsbetrag" ist der tatsächlich ausgezahlte Betrag. Beide Werte extrahieren wenn vorhanden!
-- WICHTIG: Wenn das PDF MEHRERE Gehaltsabrechnungen enthält (z.B. 3 Monate), extrahiere die Daten der NEUESTEN Abrechnung, aber setze months_covered auf die Gesamtzahl!
+- WICHTIG: Wenn das PDF MEHRERE Gehaltsabrechnungen enthält (z.B. 3 Monate), extrahiere die Daten der NEUESTEN Abrechnung, aber setze months_covered auf die GESAMTZAHL aller enthaltenen Abrechnungen!
 
 Für Kontoauszüge:
 - Bank, IBAN, Kontostand, Zeitraum
-- months_covered (Anzahl der abgedeckten Monate als Zahl, z.B. 1 wenn nur ein Monat, 3 wenn Quartal/3 Monate enthalten)
+- months_covered (PFLICHT! Zähle wie viele Monate dieser Kontoauszug abdeckt. Prüfe den Zeitraum: Jan-März = 3. Ein einzelner Monatsauszug = 1.)
 - Regelmäßige Eingänge/Ausgänge
 
 Für Selbstauskunft:
@@ -427,7 +427,7 @@ def analyze_with_gpt4o(file_bytes: bytes, mime_type: str, filename: str) -> dict
             logger.info(f"PDF mit Text: {len(extracted_text)} Zeichen")
             messages = [
                 system_msg,
-                {"role": "user", "content": f"Dokument: {filename}\n\nExtrahierter Text:\n{extracted_text[:15000]}"},
+                {"role": "user", "content": f"Dokument: {filename} ({page_count} Seiten)\n\nExtrahierter Text:\n{extracted_text[:15000]}"},
             ]
             model = "gpt-4o-mini"  # Günstiger für Text-Only
         else:
