@@ -3087,6 +3087,14 @@ async def admin_cleanup_emails():
                     results[result_type] = cur.rowcount
         except Exception as e:
             results[result_type] = f"error: {e}"
+    # Auch alle Einträge mit leerem from_email löschen (kaputte Lock-Einträge)
+    try:
+        with _pg._get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM processed_emails WHERE from_email = '' OR from_email IS NULL")
+                results["empty_from_email"] = cur.rowcount
+    except Exception as e:
+        results["empty_from_email"] = f"error: {e}"
     return {"cleaned": results}
 
 
