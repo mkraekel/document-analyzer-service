@@ -473,11 +473,16 @@ def log_processed_email(
                         mail_type = EXCLUDED.mail_type,
                         processing_result = EXCLUDED.processing_result,
                         case_id = EXCLUDED.case_id,
+                        from_email = EXCLUDED.from_email,
+                        subject = EXCLUDED.subject,
+                        conversation_id = EXCLUDED.conversation_id,
                         body_text = EXCLUDED.body_text,
                         body_html = EXCLUDED.body_html,
                         parsed_result = EXCLUDED.parsed_result,
                         matched_by = EXCLUDED.matched_by,
-                        processed_at = EXCLUDED.processed_at
+                        processed_at = EXCLUDED.processed_at,
+                        attachments_count = EXCLUDED.attachments_count,
+                        attachments_hashes = EXCLUDED.attachments_hashes
                 """, (
                     _new_id(), provider_message_id, intent, action,
                     case_id or "", from_email or "", subject or "",
