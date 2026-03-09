@@ -740,6 +740,11 @@ def create_finlink_lead(case_id: str, facts: dict, applicant_name: str = "", par
     Wird als Background-Task aufgerufen, daher eigenes Error-Handling.
     facts = die initialen facts_extracted aus der E-Mail-Analyse.
     """
+    from notify import EMAIL_DRY_RUN
+    if EMAIL_DRY_RUN:
+        logger.info(f"[Finlink] DRY-RUN aktiv – Lead fuer {case_id} nicht erstellt")
+        return
+
     if not FINLINK_API_KEY:
         logger.info(f"[Finlink] API Key nicht konfiguriert – Lead fuer {case_id} uebersprungen")
         return
