@@ -202,12 +202,14 @@ Für Steuerbescheide:
 - Einkünfte aus Gewerbebetrieb/selbständiger Arbeit
 - Einkünfte aus Vermietung und Verpachtung
 - Erstattung/Nachzahlung
+- documents_covered (Anzahl der enthaltenen Steuerbescheide/Jahre als Zahl, z.B. 1 wenn nur ein Jahr, 2 wenn zwei Jahre in einem PDF)
 
 Für Steuererklärungen:
 - Steuerjahr
 - Einkünfte aus nichtselbständiger Arbeit
 - Einkünfte aus Vermietung und Verpachtung
 - Werbungskosten
+- documents_covered (Anzahl der enthaltenen Steuererklärungen/Jahre als Zahl)
 
 Für BWA (Betriebswirtschaftliche Auswertung):
 - Zeitraum (Monat/Jahr), Firma/Unternehmen
@@ -218,6 +220,7 @@ Für Jahresabschluss:
 - Jahr, Firma/Unternehmen
 - Bilanzsumme, Umsatzerlöse
 - Jahresüberschuss/Gewinn
+- documents_covered (Anzahl der enthaltenen Jahresabschlüsse als Zahl, z.B. 1 wenn nur ein Jahr, 3 wenn drei Jahre in einem PDF)
 
 Für Summen und Saldenliste:
 - Zeitraum, Firma/Unternehmen

@@ -341,16 +341,19 @@ def _guess_salutation(first_name: str) -> Optional[str]:
     return None
 
 
-def _parse_months_covered(ext: dict) -> int:
-    """Parse months_covered from extracted data. Handles int, float, and string values."""
-    months = ext.get("months_covered")
-    if not months:
-        return 1  # Default: 1 Monat pro Dokument
-    try:
-        val = int(float(str(months)))
-        return val if val > 0 else 1
-    except (ValueError, TypeError):
-        return 1
+def _parse_docs_covered(ext: dict) -> int:
+    """Parse months_covered or documents_covered from extracted data.
+    Handles int, float, and string values from GPT."""
+    for key in ("months_covered", "documents_covered"):
+        val = ext.get(key)
+        if val:
+            try:
+                n = int(float(str(val)))
+                if n > 0:
+                    return n
+            except (ValueError, TypeError):
+                continue
+    return 1  # Default: 1 pro Dokument
 
 
 def _doc_age_ok(doc: dict, max_age_days: Optional[int]) -> bool:
@@ -545,17 +548,17 @@ def check_readiness(case_id: str) -> dict:
 
         fresh_docs = [d for d in docs if accept_stale or _doc_age_ok(d, max_age)]
 
-        # Kontoauszug + Gehaltsnachweis: months_covered zählen statt Datei-Anzahl
-        # Ein PDF kann mehrere Monate abdecken (z.B. 3 Gehaltsabrechnungen in einer PDF)
-        if doc_type in ("Kontoauszug", "Gehaltsnachweis"):
+        # Dokumente mit count > 1: months_covered/documents_covered zählen statt Datei-Anzahl
+        # Ein PDF kann mehrere Monate/Jahre abdecken (z.B. 3 Gehaltsabrechnungen, 2 Steuerbescheide)
+        if required_count > 1:
             effective_count = 0
             for doc in fresh_docs:
                 ext = doc.get("extracted") or {}
-                effective_count += _parse_months_covered(ext)
+                effective_count += _parse_docs_covered(ext)
             effective_count_all = 0
             for doc in docs:
                 ext = doc.get("extracted") or {}
-                effective_count_all += _parse_months_covered(ext)
+                effective_count_all += _parse_docs_covered(ext)
         else:
             effective_count = len(fresh_docs)
             effective_count_all = len(docs)
@@ -607,7 +610,7 @@ def check_readiness(case_id: str) -> dict:
         effective_months = 0
         for doc in kontoauszug_docs:
             ext = doc.get("extracted") or {}
-            effective_months += _parse_months_covered(ext)
+            effective_months += _parse_docs_covered(ext)
         if effective_months >= 3:
             missing_docs = [d for d in missing_docs if d["type"] != "Eigenkapitalnachweis"]
             logger.info(f"[{case_id}] Eigenkapitalnachweis durch {len(kontoauszug_docs)} Kontoauszüge ({effective_months} Monate) abgedeckt")
