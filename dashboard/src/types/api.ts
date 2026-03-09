@@ -78,6 +78,7 @@ export interface CaseDetail {
   investagon_links: string[]
   last_status_change: string
   europace_case_id: string
+  finlink_lead_id: string
   europace_response: Record<string, unknown>
   conversation_ids: string[]
   facts_extracted: Record<string, unknown>

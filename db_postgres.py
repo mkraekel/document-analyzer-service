@@ -166,6 +166,7 @@ ALTER TABLE fin_cases ADD COLUMN IF NOT EXISTS final_payload_preview TEXT DEFAUL
 ALTER TABLE fin_cases ADD COLUMN IF NOT EXISTS partner_name TEXT DEFAULT '';
 ALTER TABLE fin_documents ADD COLUMN IF NOT EXISTS gdrive_file_id TEXT DEFAULT '';
 ALTER TABLE processed_emails ADD COLUMN IF NOT EXISTS body_html TEXT DEFAULT '';
+ALTER TABLE fin_cases ADD COLUMN IF NOT EXISTS finlink_lead_id TEXT DEFAULT '';
 """
 
 

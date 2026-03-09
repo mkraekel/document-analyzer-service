@@ -1,10 +1,10 @@
 """
 Import Builder
 Baut Europace-Payload gemaess Kundenangaben API v1.0, validiert und importiert Cases.
+Erstellt parallel einen Finlink-Lead via Partner API v2.
 
-API Spec: https://developer.europace.de/api/baufismart-kundenangaben-api
-Server:   https://baufinanzierung.api.europace.de
-Endpoint: POST /kundenangaben
+Europace API Spec: https://developer.europace.de/api/baufismart-kundenangaben-api
+Finlink API Spec:  POST https://api.finlink.de/partner-api/leads
 """
 
 import json
@@ -27,6 +27,12 @@ EUROPACE_API_URL = os.getenv(
     "https://baufinanzierung.api.europace.de/kundenangaben",
 )
 EUROPACE_API_KEY = os.getenv("EUROPACE_API_KEY", "")
+
+FINLINK_API_URL = os.getenv(
+    "FINLINK_API_URL",
+    "https://api.finlink.de/partner-api/leads",
+)
+FINLINK_API_KEY = os.getenv("FINLINK_API_KEY", "")
 
 # ============================================================
 # Europace Enum Mappings (for @type discriminator fields)
@@ -513,6 +519,213 @@ def build_europace_payload(case_id: str) -> dict:
 
 
 # ============================================================
+# Finlink Lead Builder
+# ============================================================
+
+FINLINK_EMPLOYMENT_MAP = {
+    "Angestellter": "employed_unlimited",
+    "Angestellte": "employed_unlimited",
+    "angestellt": "employed_unlimited",
+    "befristet": "employed_unlimited",
+    "Selbstständig": "self_employed",
+    "Selbständig": "self_employed",
+    "Freiberufler": "freelancer",
+    "Beamter": "civil_servant",
+    "Beamtin": "civil_servant",
+    "Rentner": "retired",
+    "Rentnerin": "retired",
+    "Hausfrau": "home_maker",
+    "Hausmann": "home_maker",
+}
+
+FINLINK_PROPERTY_TYPE_MAP = {
+    "ETW": "apartment",
+    "Eigentumswohnung": "apartment",
+    "EIGENTUMSWOHNUNG": "apartment",
+    "EFH": "single_family",
+    "Einfamilienhaus": "single_family",
+    "EINFAMILIENHAUS": "single_family",
+    "DHH": "double_family",
+    "Doppelhaushälfte": "double_family",
+    "DOPPELHAUSHAELFTE": "double_family",
+    "ZFH": "two_family",
+    "Zweifamilienhaus": "two_family",
+    "ZWEIFAMILIENHAUS": "two_family",
+    "RH": "middle_terraced",
+    "Reihenhaus": "middle_terraced",
+    "REIHENHAUS": "middle_terraced",
+    "MFH": "apartment_building",
+    "Mehrfamilienhaus": "apartment_building",
+    "MEHRFAMILIENHAUS": "apartment_building",
+}
+
+FINLINK_PROPERTY_USE_MAP = {
+    "Eigennutzung": "primary_residence",
+    "Eigengenutzt": "primary_residence",
+    "EIGENGENUTZT": "primary_residence",
+    "Kapitalanlage": "rental",
+    "Vermietet": "rental",
+    "VERMIETET": "rental",
+    "Teilvermietet": "partial_rental",
+    "TEILVERMIETET": "partial_rental",
+}
+
+FINLINK_RELATIONSHIP_MAP = {
+    "ledig": "single",
+    "verheiratet": "married",
+    "geschieden": "divorced",
+    "verwitwet": "widowed",
+    "getrennt lebend": "separated",
+    "eingetragene Lebenspartnerschaft": "registered_partnership",
+}
+
+FINLINK_GENDER_MAP = {
+    "Herr": "male",
+    "Frau": "female",
+}
+
+
+def build_finlink_payload(case_id: str, effective_view: dict) -> dict:
+    """Baut einen Finlink Lead-Payload aus dem effective_view."""
+    v = effective_view
+
+    def gv(primary, *fallbacks):
+        return _get_value(v, primary, *fallbacks)
+
+    # Applicant data
+    first_name = gv("applicant_data.first_name", "applicant_first_name")
+    last_name = gv("applicant_data.last_name", "applicant_last_name")
+    email = gv("applicant_data.email", "partner_email")
+    phone = gv("applicant_data.phone", "applicant_phone")
+    salutation = gv("applicant_data.salutation", "applicant_salutation")
+    gender = _map_enum(salutation, FINLINK_GENDER_MAP)
+
+    # Employment
+    emp_raw = gv("applicant_data.employment_type", "applicant_employment_type")
+    employment_status = _map_enum(emp_raw, FINLINK_EMPLOYMENT_MAP) or "employed_unlimited"
+
+    # Income
+    net_income = _safe_float(gv("applicant_data.net_income", "net_income"))
+
+    # Relationship
+    marital_raw = gv("household_data.marital_status")
+    relationship_status = _map_enum(marital_raw, FINLINK_RELATIONSHIP_MAP)
+
+    # Children
+    children = _safe_int(gv("household_data.children", "children"))
+
+    # Property
+    property_type_raw = gv("object_type", "property_data.object_type")
+    property_type = _map_enum(property_type_raw, FINLINK_PROPERTY_TYPE_MAP)
+    usage_raw = gv("usage", "property_data.usage")
+    property_use = _map_enum(usage_raw, FINLINK_PROPERTY_USE_MAP)
+
+    # Prices
+    purchase_price = _safe_float(gv("purchase_price", "property_data.purchase_price", "financing_data.purchase_price"))
+    loan_amount = _safe_float(gv("loan_amount", "financing_data.loan_amount"))
+    equity = _safe_float(gv("equity_to_use", "financing_data.equity_to_use"))
+
+    # Is couple?
+    is_couple = (
+        gv("is_couple") is True
+        or gv("applicant_2_first_name") is not None
+        or gv("applicant_data_2.first_name") is not None
+    )
+
+    payload = {
+        "lead": {
+            "email": email or gv("partner_email") or "",
+            "external_id": case_id,
+            "user_meta": {
+                "first_name": first_name or "",
+                "last_name": last_name or "",
+                "email": email or gv("partner_email") or "",
+                "phone_number": phone,
+                "gender": gender,
+                "language_preference": "de",
+            },
+            "applicant_meta": {
+                "first_name": first_name,
+                "last_name": last_name,
+                "gender": gender or "male",
+                "employment_status": employment_status,
+                "monthly_net_income": net_income,
+                "dob": gv("applicant_data.birth_date", "applicant_birth_date"),
+                "birth_city": gv("applicant_data.birth_place", "applicant_birth_place"),
+                "nationality": gv("applicant_data.nationality") or "German",
+                "german_tax_id": gv("applicant_data.tax_id", "applicant_tax_id"),
+                "relationship_status": relationship_status,
+                "number_of_dependents": children,
+                "phone_number": phone,
+                # Address
+                "street_address": gv("address_data.street"),
+                "house_number": gv("address_data.house_number"),
+                "zipcode": gv("address_data.zip"),
+                "city": gv("address_data.city"),
+                # Equity
+                "bank_savings_amount_towards_down_payment": equity,
+            },
+            "property_meta": {
+                "property_type": property_type,
+                "property_use": property_use,
+                "listed_price": purchase_price,
+                "final_sale_price": purchase_price,
+                "city_name": gv("property_data.city", "property_city"),
+                "city_zipcode": gv("property_data.zip", "property_zip"),
+                "german_zipcode_number": gv("property_data.zip", "property_zip"),
+                "street_address": gv("property_data.street", "property_street"),
+                "house_number": gv("property_data.house_number", "property_house_number"),
+                "living_size_sq_meters": _safe_float(gv("property_data.living_space", "living_space")),
+                "year_of_construction": _safe_int(gv("property_data.year_built", "year_built")),
+                "number_of_rooms": _safe_float(gv("property_data.rooms")),
+                "gross_monthly_rent": _safe_float(gv("monthly_rental_income")),
+            },
+            "loan_application_meta": {
+                "applying_alone": "with_others" if is_couple else "on_own",
+                "capital_amount_needed": _safe_int(loan_amount) or 0,
+                "finance_type": "buy_existing",
+                "found_property": "ready_to_buy" if purchase_price else "still_looking",
+                "modernization_cost": 0,
+                "refinance_amount_needed": 0,
+            },
+            "extras_meta": {
+                "notes": f"Automatisch importiert. Case-ID: {case_id}",
+                "external_id": case_id,
+                "consent_for_privacy_policy": True,
+                "created_by_push_api": True,
+            },
+        }
+    }
+
+    # Second applicant
+    if is_couple:
+        sal2 = gv("applicant_data_2.salutation", "applicant_2_salutation")
+        gender2 = _map_enum(sal2, FINLINK_GENDER_MAP)
+        emp2_raw = gv("applicant_data_2.employment_type", "applicant_2_employment_type")
+        emp2 = _map_enum(emp2_raw, FINLINK_EMPLOYMENT_MAP) or "employed_unlimited"
+        net2 = _safe_float(gv("applicant_data_2.net_income", "applicant_2_monthly_income"))
+
+        second_applicant = {
+            "first_name": gv("applicant_data_2.first_name", "applicant_2_first_name"),
+            "last_name": gv("applicant_data_2.last_name", "applicant_2_last_name"),
+            "gender": gender2 or "male",
+            "employment_status": emp2,
+            "monthly_net_income": net2,
+            "dob": gv("applicant_data_2.birth_date", "applicant_2_birth_date"),
+            "nationality": gv("applicant_data_2.nationality") or "German",
+            "relationship_status": relationship_status,
+            "lives_with_primary": True,
+            "street_address": gv("address_data.street"),
+            "house_number": gv("address_data.house_number"),
+            "zipcode": gv("address_data.zip"),
+            "city": gv("address_data.city"),
+        }
+        payload["lead"]["extras_meta"]["second_applicant"] = second_applicant
+
+    return _clean_payload(payload)
+
+
+# ============================================================
 # Payload Validator
 # ============================================================
 
@@ -688,6 +901,7 @@ def execute_import(case_id: str, dry_run: bool = False) -> dict:
         "success": False,
         "case_id": case_id,
         "europace_case_id": None,
+        "finlink_lead_id": None,
         "errors": [],
         "warnings": [],
         "payload_preview": None,
@@ -736,56 +950,87 @@ def execute_import(case_id: str, dry_run: bool = False) -> dict:
         return result
 
     # 4. Europace API aufrufen
+    europace_ok = False
     if not EUROPACE_API_KEY:
         result["errors"].append("EUROPACE_API_KEY nicht konfiguriert")
-        _update_case_error(case, {"error": "EUROPACE_API_KEY nicht konfiguriert"})
-        return result
+    else:
+        try:
+            api_response = _call_europace_api(payload)
+            status_code = api_response.get("_status_code", 0)
 
-    try:
-        api_response = _call_europace_api(payload)
-    except Exception as e:
-        error_msg = f"Europace API Fehler: {str(e)}"
-        result["errors"].append(error_msg)
-        _update_case_error(case, {"error": True, "message": error_msg})
-        logger.error(f"Europace API call failed for {case_id}: {e}")
-        return result
+            if status_code < 300:
+                europace_case_id = api_response.get("vorgangsnummer") or ""
+                result["europace_case_id"] = europace_case_id
+                europace_ok = True
+                logger.info(f"Case {case_id} imported to Europace: {europace_case_id}")
+            else:
+                error_body = json.dumps(api_response, ensure_ascii=False)
+                result["errors"].append(f"Europace API HTTP {status_code}: {error_body[:500]}")
+                logger.error(f"Europace API returned {status_code} for {case_id}")
+        except Exception as e:
+            error_msg = f"Europace API Fehler: {str(e)}"
+            result["errors"].append(error_msg)
+            logger.error(f"Europace API call failed for {case_id}: {e}")
 
-    # 5. API-Antwort auswerten
-    status_code = api_response.get("_status_code", 0)
+    # 5. Finlink Lead erstellen
+    finlink_ok = False
+    if not FINLINK_API_KEY:
+        result["warnings"].append("FINLINK_API_KEY nicht konfiguriert – Finlink uebersprungen")
+    else:
+        try:
+            finlink_payload = build_finlink_payload(case_id, effective_view)
+            finlink_response = _call_finlink_api(finlink_payload)
+            finlink_lead_id = finlink_response.get("id") or ""
+            result["finlink_lead_id"] = finlink_lead_id
+            finlink_ok = True
+            logger.info(f"Case {case_id} created as Finlink lead: {finlink_lead_id}")
+        except Exception as e:
+            error_msg = f"Finlink API Fehler: {str(e)}"
+            result["warnings"].append(error_msg)
+            logger.error(f"Finlink API call failed for {case_id}: {e}")
 
-    if status_code < 300:
-        # Erfolg — Response enthaelt "vorgangsnummer"
-        europace_case_id = api_response.get("vorgangsnummer") or ""
-        result["success"] = True
-        result["europace_case_id"] = europace_case_id
+    # 6. DB updaten basierend auf Ergebnis
+    now = datetime.utcnow().isoformat()
+    audit = case.get("_audit_log", [])
 
-        now = datetime.utcnow().isoformat()
-        audit = case.get("_audit_log", [])
+    if europace_ok:
         audit.append({
             "event": "imported_to_europace",
             "ts": now,
-            "europace_case_id": europace_case_id,
+            "europace_case_id": result["europace_case_id"],
         })
-        audit = audit[-100:]
 
-        db.update_row("fin_cases", case["_id"], {
+    if finlink_ok:
+        audit.append({
+            "event": "imported_to_finlink",
+            "ts": now,
+            "finlink_lead_id": result["finlink_lead_id"],
+        })
+
+    audit = audit[-100:]
+
+    if europace_ok:
+        result["success"] = True
+        update_data = {
             "status": "IMPORTED",
+            "europace_case_id": result["europace_case_id"],
             "europace_response": json.dumps(api_response, ensure_ascii=False),
-            "europace_case_id": europace_case_id,
             "last_status_change": now,
             "audit_log": json.dumps(audit),
+        }
+        if finlink_ok:
+            update_data["finlink_lead_id"] = result["finlink_lead_id"]
+        db.update_row("fin_cases", case["_id"], update_data)
+    elif finlink_ok:
+        # Nur Finlink ok, Europace fehlgeschlagen
+        result["success"] = False
+        db.update_row("fin_cases", case["_id"], {
+            "finlink_lead_id": result["finlink_lead_id"],
+            "audit_log": json.dumps(audit),
         })
-        logger.info(f"Case {case_id} imported to Europace: {europace_case_id}")
     else:
-        # API-Fehler
-        error_body = json.dumps(api_response, ensure_ascii=False)
-        result["errors"].append(f"Europace API HTTP {status_code}: {error_body[:500]}")
-        _update_case_error(case, {
-            "error": True,
-            "statusCode": status_code,
-            "body": api_response,
-        })
-        logger.error(f"Europace API returned {status_code} for {case_id}")
+        # Beides fehlgeschlagen
+        _update_case_error(case, {"error": True, "message": "Import fehlgeschlagen (Europace + Finlink)"})
 
     return result
 
@@ -808,6 +1053,28 @@ def _call_europace_api(payload: dict) -> dict:
         body = {"raw_body": resp.text[:2000]}
 
     body["_status_code"] = resp.status_code
+    return body
+
+
+def _call_finlink_api(payload: dict) -> dict:
+    """Ruft die Finlink Partner API synchron auf. Gibt Response als dict zurueck."""
+    headers = {
+        "x-api-key": FINLINK_API_KEY,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+    with httpx.Client(timeout=30.0) as client:
+        resp = client.post(FINLINK_API_URL, json=payload, headers=headers)
+
+    try:
+        body = resp.json()
+    except Exception:
+        body = {"raw_body": resp.text[:2000]}
+
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Finlink API HTTP {resp.status_code}: {json.dumps(body, ensure_ascii=False)[:500]}")
+
     return body
 
 

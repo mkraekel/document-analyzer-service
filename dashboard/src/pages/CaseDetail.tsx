@@ -201,12 +201,15 @@ export function CaseDetail() {
   async function doImport(dryRun: boolean) {
     setBusy(true)
     try {
-      const res = await api.post<{ europace_case_id?: string; errors?: string[] }>(
+      const res = await api.post<{ europace_case_id?: string; finlink_lead_id?: string; errors?: string[] }>(
         `/api/dashboard/case/${caseId}/import`,
         { dry_run: dryRun },
       )
-      if (res.europace_case_id) {
-        addToast(`Import erfolgreich: ${res.europace_case_id}`, 'success')
+      if (res.europace_case_id || res.finlink_lead_id) {
+        const parts = []
+        if (res.europace_case_id) parts.push(`Europace: ${res.europace_case_id}`)
+        if (res.finlink_lead_id) parts.push(`Finlink: ${res.finlink_lead_id}`)
+        addToast(`Import erfolgreich – ${parts.join(', ')}`, 'success')
       } else if (res.errors?.length) {
         addToast(`Import-Fehler: ${res.errors.join(', ')}`, 'error')
       } else {
@@ -416,15 +419,18 @@ export function CaseDetail() {
         </div>
       </div>
 
-      {/* Europace Import Erfolg */}
+      {/* Import Erfolg */}
       {c.status === 'IMPORTED' && (
         <div className="bg-emerald-50 border border-emerald-300 rounded-xl px-4 py-3 mb-4 shadow-sm">
           <div className="flex items-center gap-3">
             <Check size={20} className="text-emerald-600 shrink-0" />
             <div>
-              <h3 className="text-sm font-semibold text-emerald-900">Erfolgreich an Europace übermittelt</h3>
+              <h3 className="text-sm font-semibold text-emerald-900">Erfolgreich importiert</h3>
               {c.europace_case_id && (
                 <p className="text-sm text-emerald-700 mt-0.5">Europace-ID: <span className="font-mono font-semibold">{c.europace_case_id}</span></p>
+              )}
+              {c.finlink_lead_id && (
+                <p className="text-sm text-emerald-700 mt-0.5">Finlink-ID: <span className="font-mono font-semibold">{c.finlink_lead_id}</span></p>
               )}
             </div>
           </div>

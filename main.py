@@ -3361,6 +3361,7 @@ class ImportCaseResponse(BaseModel):
     success: bool
     case_id: str
     europace_case_id: Optional[str] = None
+    finlink_lead_id: Optional[str] = None
     errors: list = []
     warnings: list = []
     payload_preview: Optional[dict] = None
