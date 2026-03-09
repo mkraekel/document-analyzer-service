@@ -35,6 +35,7 @@ OWN_DOMAIN = "@alexander-heil.com"
 # Blocklist: Diese Absender werden IMMER geblockt (Systembenachrichtigungen etc.)
 BLOCKLIST = [
     "alexanderheil1@alexander-heil.com",
+    "office@alexander-heil.com",
 ]
 
 
