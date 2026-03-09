@@ -327,17 +327,35 @@ def process_google_drive_links(
     doc_rows = []
     all_new_facts = {}
 
-    for file_info in supported_files:
+    import time as _time
+
+    for i, file_info in enumerate(supported_files):
         fname = file_info.get("name", "unknown")
         fid = file_info["id"]
         try:
+            # Throttle: pause between GPT calls to avoid rate limits (30k TPM)
+            if i > 0:
+                _time.sleep(4)
+
             # Download
-            logger.info(f"[{case_id}] Downloading: {fname}")
+            logger.info(f"[{case_id}] Downloading: {fname} ({i+1}/{len(supported_files)})")
             file_bytes = download_file(fid)
             mime = get_mime_type(fname)
 
-            # Analyze with GPT-4o
-            result = analyze_with_gpt4o(file_bytes, mime, fname)
+            # Analyze with GPT-4o (with retry on rate limit)
+            for _attempt in range(3):
+                try:
+                    result = analyze_with_gpt4o(file_bytes, mime, fname)
+                    break
+                except Exception as _gpt_err:
+                    if "429" in str(_gpt_err) or "rate_limit" in str(_gpt_err):
+                        wait = 8 * (_attempt + 1)
+                        logger.warning(f"[{case_id}] Rate limit hit for {fname}, waiting {wait}s (attempt {_attempt+1}/3)")
+                        _time.sleep(wait)
+                        if _attempt == 2:
+                            raise
+                    else:
+                        raise
             extracted = result.get("extracted_data") or {}
 
             # Collect for batch insert
