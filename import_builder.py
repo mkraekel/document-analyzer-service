@@ -26,7 +26,16 @@ EUROPACE_API_URL = os.getenv(
     "EUROPACE_API_URL",
     "https://baufinanzierung.api.europace.de/kundenangaben",
 )
-EUROPACE_API_KEY = os.getenv("EUROPACE_API_KEY", "")
+EUROPACE_TOKEN_URL = os.getenv(
+    "EUROPACE_TOKEN_URL",
+    "https://api.europace.de/auth/access-token",
+)
+EUROPACE_CLIENT_ID = os.getenv("EUROPACE_CLIENT_ID", "")
+EUROPACE_CLIENT_SECRET = os.getenv("EUROPACE_CLIENT_SECRET", "")
+
+# Cached Europace OAuth2 token
+_europace_token: Optional[str] = None
+_europace_token_expires: float = 0
 
 FINLINK_API_URL = os.getenv(
     "FINLINK_API_URL",
@@ -987,9 +996,9 @@ def execute_import(case_id: str, dry_run: bool = False) -> dict:
         return result
 
     # 4. Europace API aufrufen
-    if not EUROPACE_API_KEY:
-        result["errors"].append("EUROPACE_API_KEY nicht konfiguriert")
-        _update_case_error(case, {"error": "EUROPACE_API_KEY nicht konfiguriert"})
+    if not EUROPACE_CLIENT_ID or not EUROPACE_CLIENT_SECRET:
+        result["errors"].append("EUROPACE_CLIENT_ID / EUROPACE_CLIENT_SECRET nicht konfiguriert")
+        _update_case_error(case, {"error": "Europace OAuth2 Credentials nicht konfiguriert"})
         return result
 
     try:
@@ -1039,10 +1048,38 @@ def execute_import(case_id: str, dry_run: bool = False) -> dict:
     return result
 
 
+def _get_europace_token() -> str:
+    """Holt einen Europace OAuth2 Token via Client Credentials Flow. Cached bis Ablauf."""
+    global _europace_token, _europace_token_expires
+    import time as _time
+
+    if _europace_token and _time.time() < _europace_token_expires - 60:
+        return _europace_token
+
+    if not EUROPACE_CLIENT_ID or not EUROPACE_CLIENT_SECRET:
+        raise RuntimeError("EUROPACE_CLIENT_ID und EUROPACE_CLIENT_SECRET muessen gesetzt sein")
+
+    resp = httpx.post(EUROPACE_TOKEN_URL, data={
+        "grant_type": "client_credentials",
+        "client_id": EUROPACE_CLIENT_ID,
+        "client_secret": EUROPACE_CLIENT_SECRET,
+    }, timeout=15.0)
+
+    if resp.status_code != 200:
+        raise RuntimeError(f"Europace token request failed ({resp.status_code}): {resp.text[:500]}")
+
+    data = resp.json()
+    _europace_token = data["access_token"]
+    _europace_token_expires = _time.time() + data.get("expires_in", 3600)
+    logger.info("[Europace] Token acquired, expires in %ds", data.get("expires_in", 3600))
+    return _europace_token
+
+
 def _call_europace_api(payload: dict) -> dict:
     """Ruft die Europace API synchron auf. Gibt Response als dict zurueck."""
+    token = _get_europace_token()
     headers = {
-        "Authorization": f"Bearer {EUROPACE_API_KEY}",
+        "Authorization": f"Bearer {token}",
         "Content-Type": "application/json;version=1.0",
         "Accept": "application/json;version=1.0",
     }
