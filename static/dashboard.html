@@ -113,6 +113,8 @@ const FIELD_LABELS = {
   usage: 'Nutzung',
   partnerId: 'Partner-ID',
   employment_type: 'Beschaeftigungsart',
+  monthly_rent: 'Monatliche Miete (Warmmiete)',
+  monthly_rental_income: 'Monatliche Mieteinnahmen',
 };
 
 const STATUS_LABELS = {
@@ -646,7 +648,7 @@ async function openCase(caseId) {
     const flatOverrides = flattenObj(c.manual_overrides);
 
     // Key financing fields for quick edit
-    const keyFields = ['purchase_price', 'loan_amount', 'equity_to_use', 'object_type', 'usage'];
+    const keyFields = ['purchase_price', 'loan_amount', 'equity_to_use', 'object_type', 'usage', 'monthly_rent', 'monthly_rental_income'];
     const effectiveView = {...flatFacts, ...flatAnswers, ...flatOverrides};
 
     document.getElementById('detail-content').innerHTML = `

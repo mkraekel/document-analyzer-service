@@ -48,6 +48,7 @@ RECOMMENDED_KEYS = [
     "occupation", "employer", "employed_since", "marital_status",
     "children", "property_street", "property_city", "property_zip",
     "living_space", "year_built", "zinsbindung", "partnerId",
+    "monthly_rent",
 ]
 
 KEY_SEARCH_PATHS = {
@@ -90,6 +91,7 @@ KEY_SEARCH_PATHS = {
     "zinsbindung": ["zinsbindung", "financing_data.zinsbindung"],
     "partnerId": ["partnerId", "partner_id"],
     "monthly_rental_income": ["monthly_rental_income", "rental_data.cold_rent", "tax_data.income_rental"],
+    "monthly_rent": ["monthly_rent", "household_data.monthly_rent", "expenses.monthly_rent", "rental_data.warm_rent"],
 }
 
 # ============================================================
@@ -257,6 +259,13 @@ def _compute_effective_view(case: dict) -> dict:
     for top_key in ["applicant_name", "partner_email", "partner_name"]:
         if not view.get(top_key) and case.get(top_key):
             view[top_key] = case[top_key]
+
+    # Wohnfläche aus Wohnflächenberechnung hat Vorrang über Exposé-Werte
+    wfb = _get_nested(view, "property_data.living_space_wfb")
+    if wfb:
+        view["living_space"] = wfb
+        if "property_data" in view and isinstance(view["property_data"], dict):
+            view["property_data"]["living_space"] = wfb
 
     # Anrede aus Vorname ableiten wenn nicht vorhanden
     if not view.get("salutation"):

@@ -140,6 +140,7 @@ _DATA_LABELS = {
     "address_city": "Wohnort",
     "self_employed_since": "Selbstständig seit (Datum)",
     "profit_last_year": "Gewinn Vorjahr",
+    "monthly_rent": "Monatliche Miete (Warmmiete)",
     "marital_status": "Familienstand",
     "children": "Anzahl Kinder",
     "property_street": "Objektadresse (Straße)",

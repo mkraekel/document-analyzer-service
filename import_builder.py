@@ -479,6 +479,21 @@ def build_europace_payload(case_id: str) -> dict:
             "summeBankUndSparguthaben": equity,
         }
 
+    # Monatliche Ausgaben (Miete)
+    haushalt_ausgaben = None
+    monthly_rent = _safe_float(gv("monthly_rent"))
+    if monthly_rent and monthly_rent > 0:
+        haushalt_ausgaben = {
+            "summeMietausgaben": monthly_rent,
+        }
+
+    # Finanzielle Situation zusammenbauen
+    finanzielle_situation = {}
+    if haushalt_vermoegen:
+        finanzielle_situation["vermoegen"] = haushalt_vermoegen
+    if haushalt_ausgaben:
+        finanzielle_situation["ausgaben"] = haushalt_ausgaben
+
     # ── Partner-ID (Betreuung) ──
     partner_id = gv("partnerId")
 
@@ -493,9 +508,7 @@ def build_europace_payload(case_id: str) -> dict:
             "haushalte": [
                 {
                     "kunden": kunden,
-                    "finanzielleSituation": {
-                        "vermoegen": haushalt_vermoegen,
-                    } if haushalt_vermoegen else None,
+                    "finanzielleSituation": finanzielle_situation if finanzielle_situation else None,
                 }
             ],
             "finanzierungsobjekt": {

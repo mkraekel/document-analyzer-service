@@ -194,7 +194,9 @@ Für Selbstauskunft:
 
 Für Immobilien-Dokumente (Exposé, Grundbuch, Kaufvertrag, Energieausweis, etc.):
 - Straße, Hausnummer, PLZ, Ort (Objektadresse - EINZELN aufteilen, nicht als ein String!)
-- Wohnfläche, Baujahr, Grundstücksgröße
+- Wohnfläche (NUR die tatsächliche Wohnfläche in m², NICHT die Grundstücksgröße! Bei ETW typisch 30-200 m², bei Häusern 80-400 m². Werte über 500 m² sind fast sicher die Grundstücksgröße!)
+- Baujahr
+- Grundstücksgröße (separat von Wohnfläche! Kann mehrere hundert oder tausend m² sein)
 - Kaufpreis
 - Objekttyp (MUSS einer sein: ETW, EFH, DHH, RH, MFH, Grundstück)
 - Nutzungsart (MUSS einer sein: Eigennutzung, Kapitalanlage, Teilvermietet)
@@ -2799,6 +2801,37 @@ def _map_extracted_to_facts(doc_type: str, extracted: dict,
             "monthly_premium": extracted.get("Monatlicher Beitrag") or extracted.get("Beitrag"),
             "insurer": extracted.get("Versicherer") or extracted.get("Versicherung"),
         }
+
+    elif doc_type in ("Wohnflächenberechnung",):
+        # Wohnflächenberechnung hat höchste Priorität für living_space
+        wfl = extracted.get("Wohnfläche") or extracted.get("Wohnflaeche") or extracted.get("Gesamtwohnfläche")
+        facts["property_data"] = {
+            "living_space": wfl,
+            "living_space_wfb": wfl,  # Marker: aus Wohnflächenberechnung (hat Vorrang)
+        }
+
+    elif doc_type in ("Baubeschreibung", "Grundriss", "Teilungserklärung", "Modernisierungsaufstellung", "Grundbuch"):
+        # Property-Dokumente: Objektadresse extrahieren, aber living_space NICHT überschreiben
+        _addr = extracted.get("Adresse") or extracted.get("Address") or {}
+        if isinstance(_addr, str):
+            _addr = {}
+        _street = (extracted.get("Straße") or extracted.get("Strasse") or extracted.get("street")
+                   or (isinstance(_addr, dict) and (_addr.get("Straße") or _addr.get("Strasse") or _addr.get("street"))))
+        _hnr = (extracted.get("Hausnummer") or extracted.get("house_number")
+                or (isinstance(_addr, dict) and (_addr.get("Hausnummer") or _addr.get("house_number"))))
+        _plz = (extracted.get("PLZ") or extracted.get("zip")
+                or (isinstance(_addr, dict) and (_addr.get("PLZ") or _addr.get("zip"))))
+        _city = (extracted.get("Ort") or extracted.get("Stadt") or extracted.get("city")
+                 or (isinstance(_addr, dict) and (_addr.get("Ort") or _addr.get("Stadt") or _addr.get("city"))))
+        prop = {}
+        if _street: prop["street"] = _street
+        if _hnr: prop["house_number"] = _hnr
+        if _plz: prop["zip"] = _plz; prop["plz"] = _plz
+        if _city: prop["city"] = _city; prop["ort"] = _city
+        baujahr = extracted.get("Baujahr")
+        if baujahr: prop["year_built"] = baujahr
+        if prop:
+            facts["property_data"] = prop
 
     elif doc_type in ("Energieausweis",):
         facts["property_data"] = {
