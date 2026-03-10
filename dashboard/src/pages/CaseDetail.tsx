@@ -94,8 +94,12 @@ const EUROPACE_GROUPS = [
       { key: 'equity_to_use', paths: ['equity_to_use', 'financing_data.equity_to_use'] },
       { key: 'zinsbindung', paths: ['zinsbindung'] },
       { key: 'wunschrate', paths: ['wunschrate'] },
+    ],
+  },
+  {
+    title: 'Ausgaben',
+    fields: [
       { key: 'monthly_rent', paths: ['monthly_rent'] },
-      { key: 'monthly_rental_income', paths: ['monthly_rental_income'] },
     ],
   },
 ]
