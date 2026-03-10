@@ -411,7 +411,12 @@ async def dashboard_action(case_id: str, req: ActionRequest):
         elif action == "WAIT_FOR_DOCS":
             cases.save_answers(case_id, {}, actor="broker", overrides={"WAIT_FOR_DOCS": True})
         elif action == "RECHECK":
-            pass  # nur Recheck, kein Override
+            # Scan Google Drive for new files in background before readiness check
+            case = cases.load_case(case_id)
+            gdrive_links = case.get("_google_drive_links") or [] if case else []
+            if gdrive_links:
+                import asyncio
+                asyncio.create_task(_scan_gdrive_and_recheck(case_id, gdrive_links))
         elif action == "REANALYZE":
             import asyncio
             asyncio.create_task(_do_reanalyze(case_id))
@@ -432,6 +437,24 @@ async def dashboard_action(case_id: str, req: ActionRequest):
     except Exception as e:
         logger.error(f"Action failed: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _scan_gdrive_and_recheck(case_id: str, links: list):
+    """Background: scan Google Drive folders for new files, analyze them, then recheck."""
+    import asyncio
+    try:
+        import gdrive
+        result = await asyncio.to_thread(
+            gdrive.process_google_drive_links, case_id=case_id, links=links
+        )
+        processed = result.get("files_processed", 0)
+        logger.info(f"[{case_id}] GDrive scan on RECHECK: {processed} new files")
+        if processed > 0:
+            readiness_result = await asyncio.to_thread(rdns.check_readiness, case_id)
+            import notify
+            notify.dispatch_notifications(case_id, readiness_result)
+    except Exception as e:
+        logger.error(f"[{case_id}] GDrive scan on RECHECK failed: {e}")
 
 
 # ──────────────────────────────────────────
