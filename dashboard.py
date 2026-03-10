@@ -506,7 +506,7 @@ async def dashboard_create_case(req: CreateCaseFromTriageRequest):
             partner_phone="",
             conversation_id=conv_id,
             facts=facts,
-            partner_name=email.get("from_name", ""),
+            partner_name=email.get("parsed_result", {}).get("sender_first_name") or email.get("from_name", ""),
         )
 
         # 3. E-Mail zuordnen
@@ -898,13 +898,12 @@ async def dashboard_scan_documents(case_id: str, req: ScanRequest = None):
 @router.get("/api/dashboard/outgoing-emails")
 async def dashboard_outgoing_emails(case_id: Optional[str] = None):
     try:
-        email_cols = ["to", "subject", "body_text", "body_html", "logged_at", "dry_run"]
+        email_cols = ["to", "subject", "body_text", "body_html", "logged_at", "dry_run", "case_id"]
         if case_id:
-            # Filter direkt in SQL statt alle laden + Python-Filter
             rows = db.query_rows(
                 "email_test_log", email_cols,
-                where="subject LIKE %s",
-                where_params=(f"%{case_id}%",),
+                where="case_id = %s",
+                where_params=(case_id,),
                 order_by="created_at DESC",
                 limit=100,
             )
@@ -923,6 +922,7 @@ async def dashboard_outgoing_emails(case_id: Optional[str] = None):
                 "body_html": (e.get("body_html") or "")[:1000],
                 "logged_at": e.get("logged_at"),
                 "dry_run": e.get("dry_run", True),
+                "case_id": e.get("case_id", ""),
             })
         return {"emails": items}
     except Exception as e:

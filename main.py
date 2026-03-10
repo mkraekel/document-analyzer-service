@@ -926,6 +926,8 @@ Antworte NUR mit validem JSON:
 
   "google_drive_links": ["https://drive.google.com/drive/folders/..." oder leere Liste],
 
+  "sender_first_name": "Vorname des Absenders/Kontaktperson (aus Signatur, Grußformel, oder From-Name extrahieren). Nur den Vornamen, nicht den Nachnamen. Bei Firmennamen null.",
+
   "summary": "Kurze Zusammenfassung in einem Satz"
 }"""
 
@@ -1920,6 +1922,7 @@ Antworte NUR mit JSON:
   "equity_to_use": number | null,
   "object_type": "ETW"|"EFH"|"DHH"|"RH"|"MFH"|null,
   "usage": "Eigennutzung"|"Kapitalanlage"|null,
+  "sender_first_name": "Vorname des ABSENDERS (nicht des Antragstellers!) - aus Signatur, Grußformel oder From-Header extrahieren. Nur Vorname, kein Nachname. Bei reinen Firmennamen null.",
   "extracted_answers": {
     // Broker-Overrides – NUR bei is_broker_reply=true relevant:
     // APPROVE_IMPORT: true bei "FREIGABE", "GENEHMIGT", "approved", "ok starten", "Freigabe erteilt"
@@ -2063,6 +2066,7 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
             },
         }
         partner_email_for_case = _safe_partner_email(parsed.get("partner_email"), request.from_email)
+        partner_name = parsed.get("sender_first_name") or request.from_name or ""
         cases.create_case(
             case_id=case_id,
             applicant_name=applicant_name,
@@ -2070,7 +2074,7 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
             partner_phone="",
             conversation_id=request.conversation_id,
             facts=facts,
-            partner_name=request.from_name or "",
+            partner_name=partner_name,
         )
         needs_folder = True  # n8n soll OneDrive-Ordner erstellen
 
@@ -3052,7 +3056,7 @@ async def admin_inspect():
             result["recent_emails"] = [dict(zip(cols, row)) for row in cur.fetchall()]
 
             # Outgoing
-            cur.execute("SELECT \"to\", subject, logged_at, dry_run FROM email_test_log ORDER BY logged_at DESC LIMIT 20")
+            cur.execute("SELECT \"to\", subject, logged_at, dry_run, case_id FROM email_test_log ORDER BY logged_at DESC LIMIT 20")
             cols = [d[0] for d in cur.description]
             result["outgoing_emails"] = [dict(zip(cols, row)) for row in cur.fetchall()]
 
@@ -3067,7 +3071,7 @@ async def admin_delete_case(request: dict):
     if not case_id:
         raise HTTPException(status_code=400, detail="case_id required")
     results = {}
-    for table, col in [("fin_documents", '"caseId"'), ("processed_emails", "case_id"), ("fin_cases", "case_id")]:
+    for table, col in [("fin_documents", '"caseId"'), ("processed_emails", "case_id"), ("email_test_log", "case_id"), ("fin_cases", "case_id")]:
         try:
             with _pg._get_conn() as conn:
                 with conn.cursor() as cur:

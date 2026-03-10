@@ -103,52 +103,72 @@ def _create_draft(to: str, subject: str, html_body: str):
         raise RuntimeError(f"Graph API error {resp.status_code}: {resp.text[:200]}")
 
 
-def _log_to_db(to: str, subject: str, html_body: str, text_body: str = None):
+def _log_to_db(to: str, subject: str, html_body: str, text_body: str = None, case_id: str = None):
     """Schreibt E-Mail in DB email_test_log (Dry-Run oder Fallback)."""
     try:
         import db_postgres as db
-        db.create_row("email_test_log", {
+        row = {
             "to": to,
             "subject": subject,
             "body_text": (text_body or "")[:2000],
             "body_html": html_body[:5000],
             "logged_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
             "dry_run": True,
-        })
+        }
+        if case_id:
+            row["case_id"] = case_id
+        db.create_row("email_test_log", row)
         logger.info(f"[DRY-RUN] E-Mail geloggt: To={to} | {subject}")
     except Exception as e:
         logger.warning(f"[DRY-RUN] DB-Log fehlgeschlagen ({e})")
         logger.info(f"[DRY-RUN] To={to} | Subject={subject}")
 
 
-def _send_email(to: str, subject: str, html_body: str, text_body: str = None):
+def _send_email(to: str, subject: str, html_body: str, text_body: str = None, case_id: str = None):
     """Erstellt einen E-Mail-Draft in Outlook – oder loggt im Dry-Run-Modus."""
 
     # Dry-Run: kein Draft, nur loggen
     if EMAIL_DRY_RUN:
-        _log_to_db(to, subject, html_body, text_body)
+        _log_to_db(to, subject, html_body, text_body, case_id=case_id)
         return
 
     # Graph API nicht konfiguriert
     if not MS_GRAPH_CLIENT_ID or not MS_GRAPH_TENANT_ID:
         logger.warning(f"MS Graph nicht konfiguriert – Draft fuer {to} nicht erstellt")
-        _log_to_db(to, subject, html_body, text_body)
+        _log_to_db(to, subject, html_body, text_body, case_id=case_id)
         return
 
     try:
         _create_draft(to, subject, html_body)
+        # Auch bei echtem Versand loggen (dry_run=False)
+        _log_to_db(to, subject, html_body, text_body, case_id=case_id)
     except Exception as e:
         logger.error(f"Draft-Erstellung fehlgeschlagen fuer {to}: {e}")
-        _log_to_db(to, subject, html_body, text_body)
+        _log_to_db(to, subject, html_body, text_body, case_id=case_id)
         raise
 
 
 def _get_partner_first_name(effective_view: dict) -> str:
-    """Extrahiert den Vornamen des Vertriebspartners."""
-    full = effective_view.get("partner_name", "")
-    if full:
-        return full.strip().split()[0]
-    return ""
+    """Extrahiert den Vornamen des Vertriebspartners.
+
+    partner_name enthält bereits den Vornamen (via GPT sender_first_name).
+    Fallback: erstes Wort vom vollen Namen, aber nur wenn es wie ein
+    Personenname aussieht (nicht bei Firmennamen wie 'GmbH', 'AG' etc.).
+    """
+    name = effective_view.get("partner_name", "").strip()
+    if not name:
+        return ""
+    # Wenn es schon ein einzelner Vorname ist (kein Leerzeichen), direkt nutzen
+    if " " not in name:
+        return name
+    # Mehrteiliger Name: erstes Wort nur wenn kein Firmenname
+    _company_indicators = {"gmbh", "ag", "ug", "kg", "ohg", "gbr", "e.v.", "e.k.",
+                           "ltd", "inc", "corp", "llc", "consulting", "immobilien",
+                           "finance", "invest", "deutschland", "group", "holding"}
+    lower = name.lower()
+    if any(ind in lower for ind in _company_indicators):
+        return ""
+    return name.split()[0]
 
 
 # Labels fuer technische Keys
@@ -298,6 +318,7 @@ def send_partner_questions(case_id: str, partner_email: str, readiness_result: d
         subject=f"Fehlende Unterlagen – Finanzierungsanfrage {subject_name}",
         html_body=html_body,
         text_body=body + "\n\nMit freundlichen Grüßen\nAlexander Heil Finanzierung",
+        case_id=case_id,
     )
 
 
@@ -324,6 +345,7 @@ def send_broker_confirmation(case_id: str, effective_view: dict):
         to=BROKER_EMAIL,
         subject=f"[FREIGABE] {display_name} - Bereit fuer Import",
         html_body=html_body,
+        case_id=case_id,
     )
 
 
@@ -357,6 +379,7 @@ def send_manual_review(case_id: str, readiness_result: dict, effective_view: dic
         to=BROKER_EMAIL,
         subject=f"[REVIEW] Veraltete Dokumente - {display_name}",
         html_body=html_body,
+        case_id=case_id,
     )
 
 
@@ -455,6 +478,7 @@ Wir haben noch keine Rückmeldung zu unserer vorherigen Anfrage erhalten.</em></
             subject=f"{prefix}Fehlende Unterlagen – Finanzierungsanfrage {subject_name}",
             html_body=html_body,
             text_body=body_with_note + "\n\nMit freundlichen Grüßen\nAlexander Heil Finanzierung",
+            case_id=case_id,
         )
         logger.info(f"Reminder #{reminder_count} gesendet an Partner {partner_email} für Case {case_id}")
 
