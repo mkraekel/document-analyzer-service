@@ -556,6 +556,17 @@ async def _trigger_setup_case(case_id: str, outlook_message_id: str, applicant_n
 # API: Update Case Fields (Facts/Answers)
 # ──────────────────────────────────────────
 
+def _unflatten_key(dotted_key: str, value) -> dict:
+    """Convert 'a.b.c' + val into {'a': {'b': {'c': val}}}"""
+    parts = dotted_key.split(".")
+    result = {}
+    current = result
+    for part in parts[:-1]:
+        current[part] = {}
+        current = current[part]
+    current[parts[-1]] = value
+    return result
+
 class UpdateFieldRequest(BaseModel):
     field: str       # z.B. "purchase_price", "applicant_name", "object_type"
     value: str       # Wert als String (wird ggf. zu Zahl konvertiert)
@@ -584,9 +595,12 @@ async def dashboard_update_field(case_id: str, req: UpdateFieldRequest):
                 raise HTTPException(status_code=400, detail=f"Feld {req.field} nicht erlaubt")
             db.update_row("fin_cases", case["_id"], {req.field: str(val)})
         elif req.target == "facts":
-            cases.save_facts(case_id, {req.field: val}, source="dashboard")
+            # Unflatten dotted keys: "applicant_data.employment_type" -> {"applicant_data": {"employment_type": val}}
+            facts_dict = _unflatten_key(req.field, val)
+            cases.save_facts(case_id, facts_dict, source="dashboard")
         else:
-            cases.save_answers(case_id, {req.field: val}, actor="broker")
+            override_dict = _unflatten_key(req.field, val)
+            cases.save_answers(case_id, override_dict, actor="broker")
 
         result = rdns.check_readiness(case_id)
         return {"success": True, "case_id": case_id, "status": result.get("status")}
