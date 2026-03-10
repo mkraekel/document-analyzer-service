@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 # n8n Webhook fuer E-Mail-Versand
 N8N_SEND_EMAIL_WEBHOOK = os.getenv("N8N_SEND_EMAIL_WEBHOOK", "")
+N8N_WEBHOOK_API_KEY = os.getenv("N8N_WEBHOOK_API_KEY", "")
 
 BROKER_EMAIL = os.getenv("BROKER_EMAIL", "backoffice@alexander-heil.com")
 
@@ -46,7 +47,11 @@ def _send_via_n8n(to: str, subject: str, html_body: str, case_id: str = None):
     if case_id:
         payload["case_id"] = case_id
 
-    resp = httpx.post(N8N_SEND_EMAIL_WEBHOOK, json=payload, timeout=30.0)
+    headers = {}
+    if N8N_WEBHOOK_API_KEY:
+        headers["X-API-Key"] = N8N_WEBHOOK_API_KEY
+
+    resp = httpx.post(N8N_SEND_EMAIL_WEBHOOK, json=payload, headers=headers, timeout=30.0)
 
     if resp.status_code in (200, 201):
         logger.info(f"[n8n] E-Mail-Webhook OK fuer {to}: {subject}")

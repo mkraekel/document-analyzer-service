@@ -22,9 +22,16 @@ import notify
 
 N8N_SCAN_WEBHOOK = os.getenv("N8N_SCAN_WEBHOOK", "")
 N8N_SETUP_CASE_WEBHOOK = os.getenv("N8N_SETUP_CASE_WEBHOOK", "")
+N8N_WEBHOOK_API_KEY = os.getenv("N8N_WEBHOOK_API_KEY", "")
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+def _n8n_headers() -> dict:
+    """Returns auth headers for n8n webhook calls."""
+    if N8N_WEBHOOK_API_KEY:
+        return {"X-API-Key": N8N_WEBHOOK_API_KEY}
+    return {}
 
 # Interne Domains die NICHT als partner_email verwendet werden sollen
 _INTERNAL_DOMAINS = {"alexander-heil.com"}
@@ -563,7 +570,7 @@ async def _trigger_setup_case(case_id: str, outlook_message_id: str, applicant_n
     """Triggert n8n Setup-Case Webhook im Hintergrund (OneDrive + Attachment-Analyse)."""
     try:
         async with httpx.AsyncClient(timeout=180) as client:
-            resp = await client.post(N8N_SETUP_CASE_WEBHOOK, json={
+            resp = await client.post(N8N_SETUP_CASE_WEBHOOK, headers=_n8n_headers(), json={
                 "case_id": case_id,
                 "outlook_message_id": outlook_message_id,
                 "applicant_name": applicant_name,
@@ -775,7 +782,7 @@ async def _do_reanalyze(case_id: str):
     if folder_id and N8N_SCAN_WEBHOOK:
         try:
             async with httpx.AsyncClient(timeout=180) as client:
-                resp = await client.post(N8N_SCAN_WEBHOOK, json={
+                resp = await client.post(N8N_SCAN_WEBHOOK, headers=_n8n_headers(), json={
                     "case_id": case_id,
                     "onedrive_folder_id": folder_id,
                     "force_reanalyze": True,

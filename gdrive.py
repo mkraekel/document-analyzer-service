@@ -200,8 +200,11 @@ def _upload_to_onedrive(case_id: str, filename: str, file_bytes: bytes, mime: st
 
     try:
         b64 = base64.b64encode(file_bytes).decode("utf-8")
+        api_key = os.getenv("N8N_WEBHOOK_API_KEY", "")
+        headers = {"X-API-Key": api_key} if api_key else {}
         resp = httpx.post(
             webhook_url,
+            headers=headers,
             json={
                 "case_id": case_id,
                 "filename": filename,
