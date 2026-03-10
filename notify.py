@@ -1,12 +1,9 @@
 """
 Notification Sender
-Erstellt E-Mail-Drafts via Microsoft Graph API basierend auf Case-Status.
-
-Die Mails werden NICHT gesendet, sondern als Entwurf im Outlook-Postfach
-abgelegt. So kann der Broker vor dem Versand noch pruefen/anpassen.
+Sendet E-Mail-Benachrichtigungen via n8n Webhook basierend auf Case-Status.
 
 DRY-RUN MODUS:
-  EMAIL_DRY_RUN=true  → Kein Draft, E-Mails landen nur im Log.
+  EMAIL_DRY_RUN=true  → Kein Versand, E-Mails landen nur im Log.
 """
 
 import os
@@ -19,18 +16,15 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# Microsoft Graph API Credentials (Client Credentials Flow)
-MS_GRAPH_TENANT_ID = os.getenv("MS_GRAPH_TENANT_ID", "")
-MS_GRAPH_CLIENT_ID = os.getenv("MS_GRAPH_CLIENT_ID", "")
-MS_GRAPH_CLIENT_SECRET = os.getenv("MS_GRAPH_CLIENT_SECRET", "")
-MS_GRAPH_MAIL_USER = os.getenv("MS_GRAPH_MAIL_USER", "")  # Mailbox fuer Drafts (z.B. backoffice@...)
+# n8n Webhook fuer E-Mail-Versand
+N8N_SEND_EMAIL_WEBHOOK = os.getenv("N8N_SEND_EMAIL_WEBHOOK", "")
 
 BROKER_EMAIL = os.getenv("BROKER_EMAIL", "backoffice@alexander-heil.com")
 
 # Interne Domains: E-Mails an diese Adressen werden NICHT als Partner-Rueckfragen verschickt
 INTERNAL_DOMAINS = {"alexander-heil.com"}
 
-# Dry-Run: EMAIL_DRY_RUN=true → kein Draft, nur Log
+# Dry-Run: EMAIL_DRY_RUN=true → kein Versand, nur Log
 EMAIL_DRY_RUN = os.getenv("EMAIL_DRY_RUN", "false").lower() in ("true", "1", "yes")
 
 # Notification Cooldown: verhindert doppelten Versand derselben Notification
@@ -38,69 +32,27 @@ EMAIL_DRY_RUN = os.getenv("EMAIL_DRY_RUN", "false").lower() in ("true", "1", "ye
 NOTIFICATION_COOLDOWN_SECONDS = int(os.getenv("NOTIFICATION_COOLDOWN_SECONDS", "600"))  # 10 min
 _notification_cooldown: dict[tuple[str, str], float] = {}
 
-# Cached Graph API token
-_graph_token: Optional[str] = None
-_graph_token_expires: float = 0
 
+def _send_via_n8n(to: str, subject: str, html_body: str, case_id: str = None):
+    """Sendet E-Mail-Daten an n8n Webhook zum Versand."""
+    if not N8N_SEND_EMAIL_WEBHOOK:
+        raise RuntimeError("N8N_SEND_EMAIL_WEBHOOK nicht konfiguriert")
 
-def _get_graph_token() -> str:
-    """Holt einen Microsoft Graph API Token via Client Credentials Flow. Cached bis Ablauf."""
-    global _graph_token, _graph_token_expires
-
-    if _graph_token and time.time() < _graph_token_expires - 60:
-        return _graph_token
-
-    if not MS_GRAPH_TENANT_ID or not MS_GRAPH_CLIENT_ID or not MS_GRAPH_CLIENT_SECRET:
-        raise RuntimeError("MS_GRAPH_TENANT_ID, MS_GRAPH_CLIENT_ID und MS_GRAPH_CLIENT_SECRET muessen gesetzt sein")
-
-    token_url = f"https://login.microsoftonline.com/{MS_GRAPH_TENANT_ID}/oauth2/v2.0/token"
-    resp = httpx.post(token_url, data={
-        "grant_type": "client_credentials",
-        "client_id": MS_GRAPH_CLIENT_ID,
-        "client_secret": MS_GRAPH_CLIENT_SECRET,
-        "scope": "https://graph.microsoft.com/.default",
-    }, timeout=15.0)
-
-    if resp.status_code != 200:
-        raise RuntimeError(f"Graph token request failed ({resp.status_code}): {resp.text[:500]}")
-
-    data = resp.json()
-    _graph_token = data["access_token"]
-    _graph_token_expires = time.time() + data.get("expires_in", 3600)
-    logger.info("[Graph] Token acquired, expires in %ds", data.get("expires_in", 3600))
-    return _graph_token
-
-
-def _create_draft(to: str, subject: str, html_body: str):
-    """Erstellt einen E-Mail-Draft im Outlook-Postfach via Microsoft Graph API."""
-    token = _get_graph_token()
-    mail_user = MS_GRAPH_MAIL_USER or BROKER_EMAIL
-
-    url = f"https://graph.microsoft.com/v1.0/users/{mail_user}/messages"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
     payload = {
+        "to": to,
         "subject": subject,
-        "body": {
-            "contentType": "HTML",
-            "content": html_body,
-        },
-        "toRecipients": [
-            {"emailAddress": {"address": to}}
-        ],
-        "isDraft": True,
+        "html_body": html_body,
     }
+    if case_id:
+        payload["case_id"] = case_id
 
-    resp = httpx.post(url, json=payload, headers=headers, timeout=15.0)
+    resp = httpx.post(N8N_SEND_EMAIL_WEBHOOK, json=payload, timeout=30.0)
 
     if resp.status_code in (200, 201):
-        msg_id = resp.json().get("id", "")
-        logger.info(f"[Graph] Draft erstellt fuer {to}: {subject} (id={msg_id[:20]}...)")
+        logger.info(f"[n8n] E-Mail-Webhook OK fuer {to}: {subject}")
     else:
-        logger.error(f"[Graph] Draft erstellen fehlgeschlagen ({resp.status_code}): {resp.text[:500]}")
-        raise RuntimeError(f"Graph API error {resp.status_code}: {resp.text[:200]}")
+        logger.error(f"[n8n] E-Mail-Webhook fehlgeschlagen ({resp.status_code}): {resp.text[:500]}")
+        raise RuntimeError(f"n8n webhook error {resp.status_code}: {resp.text[:200]}")
 
 
 def _log_to_db(to: str, subject: str, html_body: str, text_body: str = None, case_id: str = None):
@@ -125,25 +77,24 @@ def _log_to_db(to: str, subject: str, html_body: str, text_body: str = None, cas
 
 
 def _send_email(to: str, subject: str, html_body: str, text_body: str = None, case_id: str = None):
-    """Erstellt einen E-Mail-Draft in Outlook – oder loggt im Dry-Run-Modus."""
+    """Sendet E-Mail via n8n Webhook – oder loggt im Dry-Run-Modus."""
 
-    # Dry-Run: kein Draft, nur loggen
+    # Dry-Run: kein Versand, nur loggen
     if EMAIL_DRY_RUN:
         _log_to_db(to, subject, html_body, text_body, case_id=case_id)
         return
 
-    # Graph API nicht konfiguriert
-    if not MS_GRAPH_CLIENT_ID or not MS_GRAPH_TENANT_ID:
-        logger.warning(f"MS Graph nicht konfiguriert – Draft fuer {to} nicht erstellt")
+    # n8n Webhook nicht konfiguriert
+    if not N8N_SEND_EMAIL_WEBHOOK:
+        logger.warning(f"N8N_SEND_EMAIL_WEBHOOK nicht konfiguriert – E-Mail an {to} nur geloggt")
         _log_to_db(to, subject, html_body, text_body, case_id=case_id)
         return
 
     try:
-        _create_draft(to, subject, html_body)
-        # Auch bei echtem Versand loggen (dry_run=False)
+        _send_via_n8n(to, subject, html_body, case_id=case_id)
         _log_to_db(to, subject, html_body, text_body, case_id=case_id)
     except Exception as e:
-        logger.error(f"Draft-Erstellung fehlgeschlagen fuer {to}: {e}")
+        logger.error(f"n8n E-Mail-Versand fehlgeschlagen fuer {to}: {e}")
         _log_to_db(to, subject, html_body, text_body, case_id=case_id)
         raise
 
