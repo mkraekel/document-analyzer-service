@@ -808,8 +808,7 @@ async function openCase(caseId) {
             ${c.onedrive_folder_id
               ? `<button onclick="scanDocuments('${caseId}')" class="text-xs bg-purple-50 text-purple-600 hover:bg-purple-100 px-3 py-1 rounded border border-purple-200">Dokumente scannen</button>`
               : ''}
-            <button onclick="processGoogleDrive('${caseId}','personal')" class="text-xs bg-green-50 text-green-600 hover:bg-green-100 px-3 py-1 rounded border border-green-200">Persoenliches importieren</button>
-            <button onclick="processGoogleDrive('${caseId}','property')" class="text-xs bg-teal-50 text-teal-600 hover:bg-teal-100 px-3 py-1 rounded border border-teal-200">Objektunterlagen importieren</button>
+            <button onclick="processGoogleDrive('${caseId}')" class="text-xs bg-green-50 text-green-600 hover:bg-green-100 px-3 py-1 rounded border border-green-200">Google Drive importieren</button>
           </div>
         </div>
         ${c.documents.length > 0 ? renderDocTable(c.documents)
@@ -1051,14 +1050,13 @@ async function scanDocuments(caseId) {
   } catch(e) { toast('Fehler: ' + e.message, false); }
 }
 
-async function processGoogleDrive(caseId, category) {
-  const label = category === 'property' ? 'Objektunterlagen' : 'Persoenliches';
-  const manualLink = prompt(`Google Drive Link fuer ${label} eingeben (leer lassen = automatisch aus E-Mails suchen):`);
+async function processGoogleDrive(caseId) {
+  const manualLink = prompt('Google Drive Link eingeben (leer lassen = automatisch aus E-Mails suchen):');
   const body = {};
   if (manualLink && manualLink.trim()) {
     body.google_drive_links = [manualLink.trim()];
   }
-  toast(`${label}: Dateien werden heruntergeladen und analysiert...`, true);
+  toast('Google Drive: Dateien werden heruntergeladen und analysiert...', true);
   try {
     const r = await api(`/api/dashboard/case/${caseId}/process-gdrive`, 'POST', body);
     if (r.files_processed > 0) {

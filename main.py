@@ -376,6 +376,146 @@ FILENAME_DOC_TYPE_HINTS = {
 }
 
 
+############################
+# Post-GPT Sanitization
+############################
+
+def _coerce_number(val) -> Optional[float]:
+    """Versucht einen Wert in eine Zahl umzuwandeln. Handles '3.500,00', '3500.00', '3500 EUR' etc."""
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    if not isinstance(val, str):
+        return None
+    s = val.strip()
+    # Einheiten/Währung entfernen
+    for suffix in (" EUR", " €", " Euro", " qm", " m²", " m2", "%"):
+        s = s.replace(suffix, "")
+    s = s.strip()
+    if not s:
+        return None
+    # Deutsches Format: 3.500,00 → 3500.00
+    if "," in s and "." in s:
+        s = s.replace(".", "").replace(",", ".")
+    elif "," in s:
+        s = s.replace(",", ".")
+    elif "." in s:
+        # Heuristik: "3.500" oder "1.250.000" = deutsche Tausender-Punkte, NICHT Dezimal
+        import re
+        if re.match(r"^\d{1,3}(\.\d{3})+$", s):
+            s = s.replace(".", "")
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return None
+
+
+_VALID_OBJECT_TYPES = {"ETW", "EFH", "DHH", "RH", "MFH", "Grundstück", "Grundstueck", "ZFH"}
+_VALID_USAGE = {"Eigennutzung", "Kapitalanlage", "Teilvermietet", "Vermietet"}
+_VALID_EMPLOYMENT = {"Angestellter", "Selbständig", "Selbstständig", "Freiberufler", "Beamter", "Rentner"}
+
+# Felder die als Zahlen erwartet werden (pro extracted_data key)
+_NUMERIC_FIELDS = {
+    "Brutto", "Netto", "Auszahlungsbetrag", "Kaufpreis", "Wohnfläche", "Wohnflaeche",
+    "Grundstücksgröße", "Kontostand", "Monatliche_Miete", "Monatliche Miete",
+    "Kaltmiete", "Warmmiete", "Gesamtguthaben", "Gesamtdepotwert", "Restschuld",
+    "Bausparsumme", "Angespartes Guthaben", "Monatliche Rate", "Monatlicher Beitrag",
+    "Umsatzerlöse", "Gesamtkosten", "Jahresüberschuss", "Bilanzsumme",
+    "zu versteuerndes Einkommen", "Einkommen",
+    "Einkünfte aus nichtselbständiger Arbeit",
+    "Einkünfte aus Gewerbebetrieb",
+    "Einkünfte aus Vermietung und Verpachtung",
+    "months_covered", "documents_covered",
+}
+
+# Enum-Felder: key → erlaubte Werte
+_ENUM_FIELDS = {
+    "object_type": _VALID_OBJECT_TYPES,
+    "usage": _VALID_USAGE,
+    "employment_type": _VALID_EMPLOYMENT,
+}
+
+# Plausibilitäts-Checks: Feld → (min, max, Warnung)
+_PLAUSIBILITY = {
+    "Wohnfläche": (10, 500, "Wohnfläche {val} m² unplausibel (vermutlich Grundstücksfläche?)"),
+    "Wohnflaeche": (10, 500, "Wohnfläche {val} m² unplausibel (vermutlich Grundstücksfläche?)"),
+    "Kaufpreis": (10000, 50000000, "Kaufpreis {val} € unplausibel"),
+    "months_covered": (1, 24, "months_covered {val} unplausibel"),
+    "documents_covered": (1, 10, "documents_covered {val} unplausibel"),
+}
+
+
+def _sanitize_extracted_data(result: dict) -> dict:
+    """
+    Post-GPT Validierung + Bereinigung der extrahierten Daten.
+    - Typ-Coercion für Zahlenfelder
+    - Enum-Validierung (object_type, usage, employment_type)
+    - Datumsformat-Normalisierung
+    - Plausibilitäts-Warnings in meta
+    Mutiert result in-place und gibt es zurück.
+    """
+    extracted = result.get("extracted_data")
+    if not isinstance(extracted, dict):
+        return result
+
+    warnings = []
+
+    # 1. Typ-Coercion: Zahlenfelder normalisieren
+    for key in list(extracted.keys()):
+        if key in _NUMERIC_FIELDS:
+            raw = extracted[key]
+            if raw is None:
+                continue
+            coerced = _coerce_number(raw)
+            if coerced is not None:
+                # Ganzzahlen als int speichern (months_covered etc.)
+                extracted[key] = int(coerced) if coerced == int(coerced) else coerced
+            elif isinstance(raw, str) and raw.strip():
+                # Nicht konvertierbar → auf null setzen + warnen
+                warnings.append(f"Feld '{key}' nicht als Zahl erkannt: '{raw}'")
+                extracted[key] = None
+
+    # 2. Enum-Validierung
+    for key, valid_values in _ENUM_FIELDS.items():
+        val = extracted.get(key)
+        if val and isinstance(val, str) and val not in valid_values:
+            # Fuzzy-Match: case-insensitive Suche
+            match = next((v for v in valid_values if v.lower() == val.lower()), None)
+            if match:
+                extracted[key] = match
+            else:
+                warnings.append(f"Ungültiger Wert für '{key}': '{val}' (erwartet: {', '.join(sorted(valid_values))})")
+                extracted[key] = None
+
+    # 3. Datumsformat-Normalisierung: DD.MM.YYYY → YYYY-MM-DD
+    import re
+    for key in list(extracted.keys()):
+        val = extracted[key]
+        if isinstance(val, str):
+            # DD.MM.YYYY → YYYY-MM-DD
+            m = re.match(r"^(\d{1,2})\.(\d{1,2})\.(\d{4})$", val.strip())
+            if m:
+                d, mo, y = m.groups()
+                extracted[key] = f"{y}-{mo.zfill(2)}-{d.zfill(2)}"
+
+    # 4. Plausibilitäts-Checks
+    for key, (vmin, vmax, msg_tpl) in _PLAUSIBILITY.items():
+        val = extracted.get(key)
+        if isinstance(val, (int, float)) and (val < vmin or val > vmax):
+            warnings.append(msg_tpl.format(val=val))
+
+    # Warnings in meta speichern
+    if warnings:
+        meta = result.get("meta") or {}
+        meta["validation_warnings"] = warnings
+        result["meta"] = meta
+        for w in warnings:
+            logger.warning(f"Sanitize: {w}")
+
+    return result
+
+
 def _filename_fallback_doc_type(filename: str) -> Optional[str]:
     """Versucht doc_type aus Dateiname zu erkennen (Fallback wenn GPT Sonstiges sagt)."""
     name_lower = filename.lower().rsplit(".", 1)[0]  # Extension entfernen
@@ -417,6 +557,7 @@ def analyze_with_gpt4o(file_bytes: bytes, mime_type: str, filename: str) -> dict
 
     # Für PDFs: Erst Text extrahieren
     extracted_text = ""
+    pages_truncated = False  # True wenn gescanntes PDF mehr Seiten hat als gerendert wurden
     if mime_type == "application/pdf":
         extracted_text, page_count = extract_text_from_pdf(file_bytes)
         logger.info(f"PDF {filename}: {len(extracted_text)} Zeichen Text, {page_count} Seiten")
@@ -440,6 +581,9 @@ def analyze_with_gpt4o(file_bytes: bytes, mime_type: str, filename: str) -> dict
             # PDF ohne Text (gescannt) → als Bild rendern und Vision API nutzen
             page_images = pdf_pages_to_images(file_bytes, max_pages=5)
             if page_images:
+                if page_count > len(page_images):
+                    pages_truncated = True
+                    logger.warning(f"Scan-PDF {filename}: {page_count} Seiten, aber nur {len(page_images)} gerendert — months_covered wird ignoriert")
                 logger.info(f"Scan-PDF {filename}: {len(page_images)} Seiten als Bilder gerendert → Vision API")
                 content = [{"type": "text", "text": f"Dokument: {filename}"}]
                 for img_bytes_page, img_mime in page_images:
@@ -505,6 +649,21 @@ def analyze_with_gpt4o(file_bytes: bytes, mime_type: str, filename: str) -> dict
                 result["meta"] = result.get("meta") or {}
                 result["meta"]["filename_fallback"] = True
 
+        # Seiten abgeschnitten? → months_covered entfernen (GPT hat nicht alle Seiten gesehen)
+        if pages_truncated and isinstance(result.get("extracted_data"), dict):
+            ed = result["extracted_data"]
+            for cov_key in ("months_covered", "documents_covered"):
+                if ed.get(cov_key):
+                    logger.warning(f"Entferne {cov_key}={ed[cov_key]} weil PDF abgeschnitten ({page_count} Seiten, nur 5 gerendert)")
+                    ed.pop(cov_key)
+            meta = result.get("meta") or {}
+            meta["pages_truncated"] = True
+            meta["total_pages"] = page_count
+            result["meta"] = meta
+
+        # Post-GPT Sanitization
+        result = _sanitize_extracted_data(result)
+
         # Rotation-Retry: Bild könnte physisch gedreht sein (kein EXIF-Fix möglich)
         if result.get("doc_type") == "Sonstiges" and mime_type.startswith("image/") and not _filename_fallback_doc_type(filename):
             try:
@@ -533,7 +692,7 @@ def analyze_with_gpt4o(file_bytes: bytes, mime_type: str, filename: str) -> dict
                     logger.info(f"Rotation-Retry erfolgreich: {retry_result.get('doc_type')} (war Sonstiges)")
                     retry_result["meta"] = retry_result.get("meta") or {}
                     retry_result["meta"]["rotation_retry"] = True
-                    return retry_result
+                    return _sanitize_extracted_data(retry_result)
             except Exception as e:
                 logger.debug(f"Rotation-Retry fehlgeschlagen: {e}")
 

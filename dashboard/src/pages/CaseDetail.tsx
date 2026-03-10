@@ -358,9 +358,8 @@ export function CaseDetail() {
                 </a>
               )}
               {(c.google_drive_links || []).map((link, i) => {
-                const gdLabels = ['Persönliches', 'Objektunterlagen']
                 const label = (c.google_drive_links || []).length > 1
-                  ? (gdLabels[i] || `Google Drive (${i + 1})`)
+                  ? `Google Drive (${i + 1})`
                   : 'Google Drive'
                 return (
                   <a

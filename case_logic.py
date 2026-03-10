@@ -244,22 +244,33 @@ def _is_junk(val) -> bool:
     return isinstance(val, str) and val.strip() in _JUNK_VALUES
 
 
-def merge_facts(existing: dict, new_facts: dict) -> dict:
+def merge_facts(existing: dict, new_facts: dict, _path: str = "", _overwrites: list = None) -> dict:
     """
     Deep Merge: Last-write-wins — neuere Werte überschreiben ältere.
     Für Objekte wird rekursiv gemergt.
     Junk-Werte (N/A, -, etc.) und leere Werte werden ignoriert.
+    Loggt Überschreibungen von numerischen Feldern für Nachvollziehbarkeit.
     """
     result = dict(existing)
+    if _overwrites is None:
+        _overwrites = []
     for key, val in new_facts.items():
         if _is_junk(val):
             continue
         if val is None or val == "":
             continue
         existing_val = result.get(key)
+        full_key = f"{_path}.{key}" if _path else key
         if isinstance(val, dict) and isinstance(existing_val, dict):
-            result[key] = merge_facts(existing_val, val)
+            result[key] = merge_facts(existing_val, val, _path=full_key, _overwrites=_overwrites)
         else:
+            # Log wenn ein bestehender Wert überschrieben wird
+            if existing_val is not None and existing_val != "" and existing_val != val:
+                _overwrites.append({
+                    "field": full_key,
+                    "old": existing_val,
+                    "new": val,
+                })
             result[key] = val
     return result
 
@@ -271,10 +282,20 @@ def save_facts(case_id: str, new_facts: dict, source: str = "document") -> dict:
         raise ValueError(f"Case nicht gefunden: {case_id}")
 
     existing = case.get("_facts_extracted", {})
-    merged = merge_facts(existing, new_facts)
+    overwrites = []
+    merged = merge_facts(existing, new_facts, _overwrites=overwrites)
+
+    # Überschreibungen loggen für Nachvollziehbarkeit
+    if overwrites:
+        logger.info(f"[{case_id}] Facts merge overwrites ({source}): {len(overwrites)} Felder geändert")
+        for ow in overwrites:
+            logger.info(f"  {ow['field']}: {ow['old']!r} → {ow['new']!r}")
 
     audit = case.get("_audit_log", [])
-    audit.append({"event": "facts_updated", "ts": datetime.utcnow().isoformat(), "source": source})
+    audit_entry = {"event": "facts_updated", "ts": datetime.utcnow().isoformat(), "source": source}
+    if overwrites:
+        audit_entry["overwrites"] = overwrites
+    audit.append(audit_entry)
     audit = audit[-100:]  # max 100 Einträge
 
     db.update_row("fin_cases", case["_id"], {
