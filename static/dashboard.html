@@ -540,6 +540,20 @@ function flattenObj(obj, prefix='') {
 const DOCS_PER_PAGE = 20;
 let docsExpanded = false;
 
+const DOC_TYPES = [
+  "Selbstauskunft", "Ausweiskopie", "Gehaltsnachweis", "Gehaltsabrechnung Dezember",
+  "Kontoauszug", "Eigenkapitalnachweis", "Bausparvertrag", "Depotnachweis",
+  "Renteninfo", "Steuerbescheid", "Steuererklärung", "Lohnsteuerbescheinigung",
+  "Darlehensvertrag", "Exposé", "BWA", "Summen und Saldenliste", "Jahresabschluss",
+  "Nachweis Krankenversicherung", "Private Rentenversicherung", "Private Lebensversicherung",
+  "Objektbild Innen", "Objektbild Außen", "Baubeschreibung", "Grundriss",
+  "Teilungserklärung", "Wohnflächenberechnung", "Modernisierungsaufstellung",
+  "Grundbuch", "Energieausweis", "Kaufvertrag", "Mietvertrag",
+  "Handelsregisterauszug", "Gesellschaftsvertrag", "Sonstiges"
+];
+
+let docFilterType = '';
+
 function renderDocTable(docs) {
   // Deduplicate: group by file_name, keep latest
   const seen = new Map();
@@ -548,7 +562,6 @@ function renderDocTable(docs) {
     const key = d.file_name;
     if (seen.has(key)) {
       duplicates.set(key, (duplicates.get(key) || 1) + 1);
-      // Keep the one with latest processed_at
       const existing = seen.get(key);
       if (d.processed_at > (existing.processed_at || '')) {
         seen.set(key, d);
@@ -560,31 +573,64 @@ function renderDocTable(docs) {
   const uniqueDocs = Array.from(seen.values());
   const totalDuplicates = docs.length - uniqueDocs.length;
 
-  const displayDocs = docsExpanded ? uniqueDocs : uniqueDocs.slice(0, DOCS_PER_PAGE);
-  const hasMore = uniqueDocs.length > DOCS_PER_PAGE;
+  // Filter by type
+  const filteredDocs = docFilterType
+    ? uniqueDocs.filter(d => d.doc_type === docFilterType)
+    : uniqueDocs;
+
+  // Collect unique types for filter dropdown
+  const types = [...new Set(uniqueDocs.map(d => d.doc_type))].sort();
+
+  const displayDocs = docsExpanded ? filteredDocs : filteredDocs.slice(0, DOCS_PER_PAGE);
+  const hasMore = filteredDocs.length > DOCS_PER_PAGE;
 
   let html = '';
+
+  // Filter dropdown
+  html += `<div class="flex items-center gap-2 mb-2">`;
   if (totalDuplicates > 0) {
-    html += `<div class="text-xs text-gray-400 mb-2">${uniqueDocs.length} einzigartige Dokumente (${totalDuplicates} Duplikate ausgeblendet)</div>`;
+    html += `<span class="text-xs text-gray-400">${uniqueDocs.length} Dokumente (${totalDuplicates} Duplikate ausgeblendet)</span>`;
   }
+  html += `<select onchange="docFilterType=this.value;openCase(currentCaseId)" class="text-xs border rounded px-2 py-1 ml-auto">
+    <option value="">Alle Typen</option>
+    ${types.map(t => `<option value="${esc(t)}" ${t===docFilterType?'selected':''}>${esc(t)}</option>`).join('')}
+  </select></div>`;
+
   html += `<table class="w-full text-sm">
-    <thead><tr class="text-left text-gray-400"><th class="pb-2">Datei</th><th class="pb-2">Typ</th><th class="pb-2">Status</th><th class="pb-2">Datum</th></tr></thead>
+    <thead><tr class="text-left text-gray-400"><th class="pb-2">Datei</th><th class="pb-2">Typ</th><th class="pb-2">Status</th><th class="pb-2">Datum</th><th class="pb-2"></th></tr></thead>
     <tbody>${displayDocs.map(d => {
       const dupCount = duplicates.get(d.file_name);
+      const docId = d._id || '';
       return `<tr class="border-t hover:bg-gray-50">
         <td class="py-1">${esc(d.file_name)}${dupCount ? ` <span class="text-xs text-gray-400">(${dupCount}x)</span>` : ''}</td>
         <td class="py-1">${esc(d.doc_type)}</td>
         <td class="py-1"><span class="badge ${d.processing_status==='completed'?'badge-green':'badge-red'}">${d.processing_status === 'completed' ? 'OK' : d.processing_status}</span></td>
         <td class="py-1 text-gray-400" title="${d.processed_at || ''}">${formatTime(d.processed_at)}</td>
+        <td class="py-1">${docId ? `<button onclick="changeDocType('${docId}','${esc(d.doc_type)}')" class="text-xs text-gray-400 hover:text-blue-600" title="Typ aendern">✎</button>` : ''}</td>
       </tr>`;
     }).join('')}</tbody>
   </table>`;
   if (hasMore && !docsExpanded) {
-    html += `<button onclick="docsExpanded=true;openCase(currentCaseId)" class="mt-2 text-sm text-blue-600 hover:text-blue-800 underline">Alle ${uniqueDocs.length} Dokumente anzeigen</button>`;
+    html += `<button onclick="docsExpanded=true;openCase(currentCaseId)" class="mt-2 text-sm text-blue-600 hover:text-blue-800 underline">Alle ${filteredDocs.length} Dokumente anzeigen</button>`;
   } else if (docsExpanded && hasMore) {
     html += `<button onclick="docsExpanded=false;openCase(currentCaseId)" class="mt-2 text-sm text-blue-600 hover:text-blue-800 underline">Weniger anzeigen</button>`;
   }
   return html;
+}
+
+async function changeDocType(docId, currentType) {
+  const options = DOC_TYPES.map(t => t === currentType ? `» ${t} (aktuell)` : t);
+  const choice = prompt('Neuen Dokumenttyp waehlen:\\n\\n' + options.map((t,i) => `${i+1}. ${t}`).join('\\n') + '\\n\\nNummer eingeben:');
+  if (!choice) return;
+  const idx = parseInt(choice) - 1;
+  if (isNaN(idx) || idx < 0 || idx >= DOC_TYPES.length) { toast('Ungueltige Auswahl', false); return; }
+  const newType = DOC_TYPES[idx];
+  if (newType === currentType) return;
+  try {
+    await api(`/api/dashboard/case/${currentCaseId}/update-doc-type`, 'POST', { doc_id: docId, new_doc_type: newType });
+    toast(`Dokumenttyp geaendert: ${newType}`);
+    openCase(currentCaseId);
+  } catch(e) { toast('Fehler: ' + e.message, false); }
 }
 
 // ── Case Detail ──
@@ -760,7 +806,8 @@ async function openCase(caseId) {
             ${c.onedrive_folder_id
               ? `<button onclick="scanDocuments('${caseId}')" class="text-xs bg-purple-50 text-purple-600 hover:bg-purple-100 px-3 py-1 rounded border border-purple-200">Dokumente scannen</button>`
               : ''}
-            <button onclick="processGoogleDrive('${caseId}')" class="text-xs bg-green-50 text-green-600 hover:bg-green-100 px-3 py-1 rounded border border-green-200">Google Drive importieren</button>
+            <button onclick="processGoogleDrive('${caseId}','personal')" class="text-xs bg-green-50 text-green-600 hover:bg-green-100 px-3 py-1 rounded border border-green-200">Persoenliches importieren</button>
+            <button onclick="processGoogleDrive('${caseId}','property')" class="text-xs bg-teal-50 text-teal-600 hover:bg-teal-100 px-3 py-1 rounded border border-teal-200">Objektunterlagen importieren</button>
           </div>
         </div>
         ${c.documents.length > 0 ? renderDocTable(c.documents)
@@ -1002,14 +1049,14 @@ async function scanDocuments(caseId) {
   } catch(e) { toast('Fehler: ' + e.message, false); }
 }
 
-async function processGoogleDrive(caseId) {
-  // Optional: ask for manual links
-  const manualLink = prompt('Google Drive Link eingeben (leer lassen = automatisch aus E-Mails suchen):');
+async function processGoogleDrive(caseId, category) {
+  const label = category === 'property' ? 'Objektunterlagen' : 'Persoenliches';
+  const manualLink = prompt(`Google Drive Link fuer ${label} eingeben (leer lassen = automatisch aus E-Mails suchen):`);
   const body = {};
   if (manualLink && manualLink.trim()) {
     body.google_drive_links = [manualLink.trim()];
   }
-  toast('Google Drive Dateien werden heruntergeladen und analysiert...', true);
+  toast(`${label}: Dateien werden heruntergeladen und analysiert...`, true);
   try {
     const r = await api(`/api/dashboard/case/${caseId}/process-gdrive`, 'POST', body);
     if (r.files_processed > 0) {

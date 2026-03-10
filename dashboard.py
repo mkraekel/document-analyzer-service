@@ -211,6 +211,7 @@ async def dashboard_case_detail(case_id: str):
                 cid = onedrive_id.split("!")[0]
                 onedrive_url = f"https://onedrive.live.com?cid={cid}&id={onedrive_id}"
             doc_list.append({
+                "_id": d.get("_id", ""),
                 "file_name": file_name,
                 "doc_type": d.get("doc_type"),
                 "processing_status": d.get("processing_status"),
@@ -888,6 +889,36 @@ async def dashboard_scan_documents(case_id: str, req: ScanRequest = None):
         raise
     except Exception as e:
         logger.error(f"Scan documents failed: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ──────────────────────────────────────────
+# API: Update Document Type
+# ──────────────────────────────────────────
+
+class UpdateDocTypeRequest(BaseModel):
+    doc_id: str
+    new_doc_type: str
+
+@router.post("/api/dashboard/case/{case_id}/update-doc-type")
+async def dashboard_update_doc_type(case_id: str, req: UpdateDocTypeRequest):
+    """Ändert den Dokumenttyp eines bereits analysierten Dokuments."""
+    try:
+        db.update_row("fin_documents", req.doc_id, {"doc_type": req.new_doc_type})
+
+        # Facts neu mergen da sich der Dokumenttyp geändert hat
+        import readiness as rdns
+        result = rdns.check_readiness(case_id)
+
+        return {
+            "success": True,
+            "case_id": case_id,
+            "doc_id": req.doc_id,
+            "new_doc_type": req.new_doc_type,
+            "status": result.get("status"),
+        }
+    except Exception as e:
+        logger.error(f"Update doc type failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
