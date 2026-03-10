@@ -130,6 +130,7 @@ Dokumenttyp erkennen aus: {doc_types}
 WICHTIGE KLASSIFIZIERUNGS-HINWEISE (MUSS beachtet werden):
 - Reisepass, Personalausweis (Vorder- UND Rückseite!), Aufenthaltstitel, Identitaetsdokument → "Ausweiskopie"
 - WICHTIG: Personalausweise können GEDREHT/SEITLICH fotografiert sein! Erkennungsmerkmale: Passfoto, "BUNDESREPUBLIK DEUTSCHLAND", "PERSONALAUSWEIS/IDENTITY CARD", Name, Geburtsdatum, Ausweisnummer, Unterschrift, Hologramm → IMMER "Ausweiskopie" auch wenn das Bild um 90° oder 180° gedreht ist!
+- WICHTIG: Aufenthaltstitel-Zusatzblätter, Aufenthaltstitel-Rückseiten, Nebenbestimmungen zum Aufenthaltstitel → IMMER "Ausweiskopie", NIEMALS "BWA" oder "Sonstiges"!
 - Personalausweis-Rückseite erkennt man an: Anschrift/Adresse, Augenfarbe, Größe, Behörde/Authority, MRZ-Zeile (IDD<<...), Bundesdruckerei → IMMER "Ausweiskopie"!
 - Gehaltsabrechnung, Entgeltnachweis, Entgeltabrechnung, Lohnabrechnung, Lohnausweis, Verdienstbescheinigung, Brutto-Netto-Abrechnung, Bezuegemitteilung → "Gehaltsnachweis"
 - Renteninformation, Rentenauskunft, Deutsche Rentenversicherung, Renteninfo 20XX → "Renteninfo"
@@ -141,6 +142,8 @@ WICHTIGE KLASSIFIZIERUNGS-HINWEISE (MUSS beachtet werden):
 - Hausbeschreibung, Hausunterlagen mit technischen Details, Objektbeschreibung (technisch) → "Baubeschreibung"
 - Teilungserklaerung, Aufteilungsplan, Gemeinschaftsordnung → "Teilungserklärung"
 - Wohnflaechenberechnung, Flaechenberechnung, DIN277 Berechnung → "Wohnflächenberechnung"
+- Flurkarte, Liegenschaftskarte, Liegenschaftsplan, Katasterkarte, Lageplan (amtliche Karte mit Grundstücksgrenzen/Flurstücken) → "Grundriss"
+- Modernisierungsstandard, Modernisierungsübersicht, Sanierungsübersicht → "Modernisierungsaufstellung"
 - Lohnsteuerbescheinigung, Elektronische Lohnsteuerbescheinigung → "Lohnsteuerbescheinigung"
 - Einkommensteuerbescheid, Bescheid fuer 20XX → "Steuerbescheid"
 - Einkommensteuererklaerung, Anlage N, Anlage V, Anlage Vorsorgeaufwand → "Steuererklärung"

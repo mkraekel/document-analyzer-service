@@ -171,8 +171,10 @@ def _build_partner_email_body(
         for key in all_missing_data:
             items.append(f"  - {_DATA_LABELS.get(key, key)}")
 
-    # Fehlende Dokumente
+    # Fehlende Dokumente (mit Absatz davor wenn schon Angaben vorhanden)
     if missing_docs:
+        if items:
+            items.append("")  # Leerzeile als Absatz
         items.append("Folgende Dokumente:")
         for d in missing_docs:
             count_info = f" ({d['required']}x benötigt)" if d.get("required", 1) > 1 else ""
@@ -180,6 +182,8 @@ def _build_partner_email_body(
 
     # Veraltete Dokumente
     if stale_docs:
+        if items:
+            items.append("")  # Leerzeile als Absatz
         items.append("Folgende Dokumente in aktueller Fassung:")
         for d in stale_docs:
             items.append(f"  - {d['type']} (vorliegende Version ist leider zu alt)")
@@ -193,7 +197,7 @@ def _build_partner_email_body(
 
 {chr(10).join(items)}
 
-Könnten Sie mir diese Unterlagen/Informationen zukommen lassen?"""
+Kannst du mir diese Unterlagen/Informationen zukommen lassen?"""
 
     return body
 
@@ -260,15 +264,15 @@ def send_partner_questions(case_id: str, partner_email: str, readiness_result: d
     html_body = f"""<html><body>
 <p>{body.replace(chr(10), '<br>')}</p>
 <br>
-<p>Mit freundlichen Grüßen<br>Alexander Heil Finanzierung</p>
+<p>Mit freundlichen Grüßen<br>Alexander Heil</p>
 </body></html>"""
 
-    subject_name = applicant_name or "Ihre Anfrage"
+    subject_name = applicant_name or "deine Anfrage"
     _send_email(
         to=partner_email,
         subject=f"Fehlende Unterlagen – Finanzierungsanfrage {subject_name}",
         html_body=html_body,
-        text_body=body + "\n\nMit freundlichen Grüßen\nAlexander Heil Finanzierung",
+        text_body=body + "\n\nMit freundlichen Grüßen\nAlexander Heil",
         case_id=case_id,
     )
 
@@ -420,15 +424,15 @@ def send_reminder(case_id: str, readiness_result: dict, reminder_count: int, tar
 <em>Dies ist eine freundliche Erinnerung (Nr. {reminder_count}).
 Wir haben noch keine Rückmeldung zu unserer vorherigen Anfrage erhalten.</em></p>
 <br>
-<p>Mit freundlichen Grüßen<br>Alexander Heil Finanzierung</p>
+<p>Mit freundlichen Grüßen<br>Alexander Heil</p>
 </body></html>"""
 
-        subject_name = applicant_name or "Ihre Anfrage"
+        subject_name = applicant_name or "deine Anfrage"
         _send_email(
             to=partner_email,
             subject=f"{prefix}Fehlende Unterlagen – Finanzierungsanfrage {subject_name}",
             html_body=html_body,
-            text_body=body_with_note + "\n\nMit freundlichen Grüßen\nAlexander Heil Finanzierung",
+            text_body=body_with_note + "\n\nMit freundlichen Grüßen\nAlexander Heil",
             case_id=case_id,
         )
         logger.info(f"Reminder #{reminder_count} gesendet an Partner {partner_email} für Case {case_id}")

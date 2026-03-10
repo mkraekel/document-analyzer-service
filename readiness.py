@@ -163,6 +163,7 @@ DOC_TYPE_ALIASES: dict[str, list[str]] = {
     "Grundriss": [
         "Wohnungsgrundriss", "Grundrisszeichnung", "Grundrissplan",
         "Flurkarte", "Lageplan", "Katasterkarte", "Liegenschaftskarte",
+        "Liegenschaftsplan",
     ],
     "Eigenkapitalnachweis": [
         "Finanzstatus", "Vermögensaufstellung", "Depotauszug",
@@ -205,6 +206,7 @@ DOC_TYPE_ALIASES: dict[str, list[str]] = {
     "Modernisierungsaufstellung": [
         "Modernisierungsliste", "Sanierungsaufstellung",
         "Renovierungsaufstellung", "Modernisierungsnachweis",
+        "Modernisierungsstandard", "Modernisierungsübersicht",
     ],
 }
 
@@ -357,14 +359,20 @@ def _parse_docs_covered(ext: dict) -> int:
 
 
 def _doc_age_ok(doc: dict, max_age_days: Optional[int]) -> bool:
-    """Prüft ob Dokument nicht zu alt ist"""
+    """Prüft ob Dokument nicht zu alt ist.
+
+    Priorität: doc_date (Datum AUF dem Dokument) > analyzed_at (Zeitpunkt der Analyse).
+    Ein 2 Jahre altes Grundbuch, das gestern analysiert wurde, ist trotzdem veraltet.
+    """
     if not max_age_days:
         return True
-    analyzed = doc.get("analyzed_at") or (doc.get("meta") or {}).get("doc_date")
-    if not analyzed:
+    # doc_date hat Vorrang (= tatsaechliches Dokumentdatum)
+    doc_date = (doc.get("meta") or {}).get("doc_date") or (doc.get("extracted") or {}).get("doc_date")
+    date_str = doc_date or doc.get("analyzed_at")
+    if not date_str:
         return True  # Kein Datum → nicht prüfbar → akzeptieren
     try:
-        dt = datetime.fromisoformat(analyzed.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(str(date_str).replace("Z", "+00:00"))
         return (datetime.now(dt.tzinfo) - dt).days <= max_age_days
     except Exception:
         return True
