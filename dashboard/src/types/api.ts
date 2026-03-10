@@ -36,6 +36,7 @@ export interface CaseListItem {
 }
 
 export interface CaseDocument {
+  _id: number
   file_name: string
   doc_type: string
   processing_status: string

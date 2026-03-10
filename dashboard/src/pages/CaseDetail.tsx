@@ -112,6 +112,9 @@ export function CaseDetail() {
   const { toasts, addToast, removeToast } = useToast()
   const [busy, setBusy] = useState(false)
   const [showAllDocs, setShowAllDocs] = useState(false)
+  const [docFilterType, setDocFilterType] = useState('')
+  const [editingDocId, setEditingDocId] = useState<number | null>(null)
+  const [editDocType, setEditDocType] = useState('')
 
   // ── Processing Queue Polling ──
   interface QueueItem {
@@ -198,6 +201,30 @@ export function CaseDetail() {
     }
   }
 
+  const DOC_TYPES = [
+    'Ausweiskopie', 'Gehaltsabrechnung', 'Kontoauszug', 'Steuerbescheid',
+    'Steuererklärung', 'Grundbuch', 'Exposé', 'Energieausweis',
+    'Teilungserklärung', 'Baubeschreibung', 'Grundriss', 'Mietvertrag',
+    'Depotnachweis', 'Renteninfo', 'Nachweis Krankenversicherung',
+    'Objektbild Innen', 'Objektbild Außen', 'Wohnflächenberechnung',
+    'Modernisierungsaufstellung', 'Jahresabschluss', 'Summen und Saldenliste',
+    'BWA', 'Aufenthaltstitel', 'Sonstiges',
+  ]
+
+  async function changeDocType(docId: number, newType: string) {
+    try {
+      await api.post(`/api/dashboard/case/${caseId}/update-doc-type`, {
+        doc_id: docId,
+        new_doc_type: newType,
+      })
+      addToast(`Dokumenttyp geändert zu "${newType}"`, 'success')
+      setEditingDocId(null)
+      refetch()
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : 'Fehler', 'error')
+    }
+  }
+
   async function doImport(dryRun: boolean) {
     setBusy(true)
     try {
@@ -278,7 +305,11 @@ export function CaseDetail() {
     }
   }
   const uniqueDocs = Array.from(docMap.values())
-  const visibleDocs = showAllDocs ? uniqueDocs : uniqueDocs.slice(0, 20)
+  const filteredDocs = docFilterType
+    ? uniqueDocs.filter(d => d.doc_type === docFilterType)
+    : uniqueDocs
+  const visibleDocs = showAllDocs ? filteredDocs : filteredDocs.slice(0, 20)
+  const docTypes = [...new Set(uniqueDocs.map(d => d.doc_type).filter(Boolean))].sort()
 
   return (
     <div className="max-w-5xl">
@@ -320,18 +351,24 @@ export function CaseDetail() {
                   OneDrive Ordner
                 </a>
               )}
-              {(c.google_drive_links || []).map((link, i) => (
-                <a
-                  key={i}
-                  href={link}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-sm text-green-600 hover:text-green-800"
-                >
-                  <ExternalLink size={14} />
-                  Google Drive{(c.google_drive_links || []).length > 1 ? ` (${i + 1})` : ''}
-                </a>
-              ))}
+              {(c.google_drive_links || []).map((link, i) => {
+                const gdLabels = ['Persönliches', 'Objektunterlagen']
+                const label = (c.google_drive_links || []).length > 1
+                  ? (gdLabels[i] || `Google Drive (${i + 1})`)
+                  : 'Google Drive'
+                return (
+                  <a
+                    key={i}
+                    href={link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-sm text-green-600 hover:text-green-800"
+                  >
+                    <ExternalLink size={14} />
+                    {label}
+                  </a>
+                )
+              })}
             </div>
           </div>
 
@@ -611,6 +648,7 @@ export function CaseDetail() {
             equity_to_use: findValue(effectiveView, 'equity_to_use', 'financing_data.equity_to_use') || '',
             object_type: findValue(effectiveView, 'object_type', 'property_data.object_type') || '',
             usage: findValue(effectiveView, 'usage', 'property_data.usage') || '',
+            monthly_rent: findValue(effectiveView, 'monthly_rent') || '',
           }}
           target="overrides"
           onSaved={refetch}
@@ -735,15 +773,27 @@ export function CaseDetail() {
         isOpen={expandedSections.has('documents')}
         onToggle={() => toggleSection('documents')}
         actions={
-          c.onedrive_folder_id ? (
-            <button
-              disabled
-              title="Scan-Webhook noch nicht konfiguriert"
-              className="text-xs text-gray-400 cursor-not-allowed"
+          <div className="flex items-center gap-2">
+            <select
+              value={docFilterType}
+              onChange={e => { setDocFilterType(e.target.value); setShowAllDocs(false) }}
+              className="text-xs border border-gray-300 rounded px-2 py-1 bg-white"
             >
-              Dokumente scannen
-            </button>
-          ) : undefined
+              <option value="">Alle Typen</option>
+              {docTypes.map(t => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+            {c.onedrive_folder_id && (
+              <button
+                disabled
+                title="Scan-Webhook noch nicht konfiguriert"
+                className="text-xs text-gray-400 cursor-not-allowed"
+              >
+                Dokumente scannen
+              </button>
+            )}
+          </div>
         }
       >
         {dupeCount > 0 && (
@@ -771,7 +821,45 @@ export function CaseDetail() {
                       <td className="py-2 px-3 text-gray-900 truncate max-w-[200px]" title={displayName}>
                         {displayName}
                       </td>
-                      <td className="py-2 px-3 text-gray-600">{doc.doc_type || '-'}</td>
+                      <td className="py-2 px-3 text-gray-600">
+                        {editingDocId === doc._id ? (
+                          <div className="flex items-center gap-1">
+                            <select
+                              value={editDocType}
+                              onChange={e => setEditDocType(e.target.value)}
+                              className="text-xs border border-gray-300 rounded px-1 py-0.5"
+                              autoFocus
+                            >
+                              {DOC_TYPES.map(t => (
+                                <option key={t} value={t}>{t}</option>
+                              ))}
+                            </select>
+                            <button
+                              onClick={() => changeDocType(doc._id, editDocType)}
+                              className="text-green-600 hover:text-green-800"
+                            >
+                              <Save size={12} />
+                            </button>
+                            <button
+                              onClick={() => setEditingDocId(null)}
+                              className="text-gray-400 hover:text-gray-600"
+                            >
+                              <XIcon size={12} />
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="flex items-center gap-1">
+                            {doc.doc_type || '-'}
+                            <button
+                              onClick={() => { setEditingDocId(doc._id); setEditDocType(doc.doc_type || 'Sonstiges') }}
+                              className="text-gray-300 hover:text-gray-500"
+                              title="Typ ändern"
+                            >
+                              <Pencil size={11} />
+                            </button>
+                          </span>
+                        )}
+                      </td>
                       <td className="py-2 px-3">
                         <span className={`text-xs px-2 py-0.5 rounded-full ${
                           doc.processing_status === 'analyzed' ? 'bg-green-50 text-green-700' :
@@ -801,12 +889,12 @@ export function CaseDetail() {
                 </tbody>
               </table>
             </div>
-            {!showAllDocs && uniqueDocs.length > 20 && (
+            {!showAllDocs && filteredDocs.length > 20 && (
               <button
                 onClick={() => setShowAllDocs(true)}
                 className="mt-3 text-sm text-blue-600 hover:text-blue-800"
               >
-                Alle {uniqueDocs.length} Dokumente anzeigen
+                Alle {filteredDocs.length} Dokumente anzeigen
               </button>
             )}
           </>
