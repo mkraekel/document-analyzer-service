@@ -184,6 +184,7 @@ Für Kontoauszüge:
 - Bank, IBAN, Kontostand, Zeitraum
 - months_covered (PFLICHT! Zähle wie viele Monate dieser Kontoauszug abdeckt. Prüfe den Zeitraum: Jan-März = 3. Ein einzelner Monatsauszug = 1.)
 - Regelmäßige Eingänge/Ausgänge
+- Monatliche_Miete (Suche nach regelmäßigen Abbuchungen mit Verwendungszweck "Miete", "Kaltmiete", "Warmmiete", "Mietzahlung" o.ä. Gib den monatlichen Betrag als Zahl an. Wenn mehrere Monate sichtbar sind, nimm den typischen/wiederkehrenden Betrag.)
 
 Für Selbstauskunft:
 - Anrede (Herr/Frau), Vorname, Nachname, Geburtsdatum, Familienstand
@@ -2605,6 +2606,9 @@ def _map_extracted_to_facts(doc_type: str, extracted: dict,
             "iban": extracted.get("IBAN"),
             "kontostand": extracted.get("Kontostand"),
         }
+        _miete = extracted.get("Monatliche_Miete") or extracted.get("Monatliche Miete")
+        if _miete:
+            facts["monthly_rent"] = _miete
 
     elif doc_type in ("Exposé",):
         # Property data is shared
