@@ -352,9 +352,11 @@ def _guess_salutation(first_name: str) -> Optional[str]:
     return None
 
 
-def _parse_docs_covered(ext: dict) -> int:
+def _parse_docs_covered(ext) -> int:
     """Parse months_covered or documents_covered from extracted data.
     Handles int, float, and string values from GPT."""
+    if not isinstance(ext, dict):
+        return 1
     for key in ("months_covered", "documents_covered"):
         val = ext.get(key)
         if val:
@@ -376,7 +378,9 @@ def _doc_age_ok(doc: dict, max_age_days: Optional[int]) -> bool:
     if not max_age_days:
         return True
     # doc_date hat Vorrang (= tatsaechliches Dokumentdatum)
-    doc_date = (doc.get("meta") or {}).get("doc_date") or (doc.get("extracted") or {}).get("doc_date")
+    _meta = doc.get("meta")
+    _ext = doc.get("extracted")
+    doc_date = (_meta.get("doc_date") if isinstance(_meta, dict) else None) or (_ext.get("doc_date") if isinstance(_ext, dict) else None)
     date_str = doc_date or doc.get("analyzed_at")
     if not date_str:
         return True  # Kein Datum → nicht prüfbar → akzeptieren
@@ -391,7 +395,9 @@ def _doc_expiry_warn(doc: dict, warn_days: Optional[int]) -> bool:
     """Prüft ob Dokument bald abläuft (z.B. Ausweis)"""
     if not warn_days:
         return False
-    extracted = doc.get("extracted") or {}
+    extracted = doc.get("extracted")
+    if not isinstance(extracted, dict):
+        return False
     expiry_str = extracted.get("Gültig bis") or extracted.get("expiry_date")
     if not expiry_str:
         return False
