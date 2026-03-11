@@ -851,6 +851,33 @@ async def _do_reanalyze(case_id: str):
     folder_id = case.get("onedrive_folder_id")
     results = {}
 
+    # 0. Kein OneDrive-Ordner? → Setup Case triggern und warten
+    if not folder_id and N8N_SETUP_CASE_WEBHOOK:
+        logger.info(f"[{case_id}] Reanalyze: kein OneDrive-Ordner, triggere Setup Case...")
+        # Find an outlook_message_id from processed emails
+        emails = db.search_rows("processed_emails", "case_id", case_id) or []
+        outlook_msg_id = ""
+        for em in emails:
+            mid = em.get("provider_message_id") or ""
+            if mid:
+                outlook_msg_id = mid
+                break
+        try:
+            await _trigger_setup_case(case_id, outlook_msg_id, case.get("applicant_name", ""))
+            # Wait for n8n to create the folder (poll up to 60s)
+            import time
+            for _ in range(12):
+                await asyncio.to_thread(time.sleep, 5)
+                case = cases.load_case(case_id)
+                folder_id = case.get("onedrive_folder_id") if case else None
+                if folder_id:
+                    logger.info(f"[{case_id}] Reanalyze: OneDrive-Ordner erstellt: {folder_id}")
+                    break
+            if not folder_id:
+                logger.error(f"[{case_id}] Reanalyze: OneDrive-Ordner konnte nicht erstellt werden")
+        except Exception as e:
+            logger.error(f"[{case_id}] Reanalyze: Setup Case failed: {e}")
+
     # 1. Sync Google Drive → OneDrive (upload only, no analysis)
     gdrive_links = _collect_gdrive_links(case_id)
     if gdrive_links and folder_id:
