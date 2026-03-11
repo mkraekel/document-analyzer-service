@@ -198,6 +198,7 @@ async def dashboard_case_detail(case_id: str):
         audit = case.get("_audit_log", [])
         conv_ids = case.get("_conversation_ids", [])
 
+        case_web_url = case.get("onedrive_web_url", "")
         doc_list = []
         for d in docs:
             extracted = d.get("extracted_data", {})
@@ -212,11 +213,12 @@ async def dashboard_case_detail(case_id: str):
                 file_name = file_name[7:]
             gdrive_id = d.get("gdrive_file_id", "")
             onedrive_id = d.get("onedrive_file_id", "")
-            # OneDrive-Link: CID aus der Folder-ID extrahieren (Format: CID!sXXX)
+            # OneDrive-Link: Ordner-URL + Dateiname (Business/SharePoint)
             onedrive_url = ""
-            if onedrive_id and "!" in onedrive_id:
-                cid = onedrive_id.split("!")[0]
-                onedrive_url = f"https://onedrive.live.com?cid={cid}&id={onedrive_id}"
+            if onedrive_id and case_web_url:
+                import urllib.parse
+                encoded_name = urllib.parse.quote(file_name)
+                onedrive_url = f"{case_web_url}/{encoded_name}"
             doc_list.append({
                 "_id": d.get("_id", ""),
                 "file_name": file_name,
@@ -419,8 +421,7 @@ async def dashboard_action(case_id: str, req: ActionRequest):
             cases.save_answers(case_id, {}, actor="broker", overrides={"WAIT_FOR_DOCS": True})
         elif action == "RECHECK":
             # Scan Google Drive for new files in background before readiness check
-            case = cases.load_case(case_id)
-            gdrive_links = case.get("_google_drive_links") or [] if case else []
+            gdrive_links = _collect_gdrive_links(case_id)
             if gdrive_links:
                 import asyncio
                 asyncio.create_task(_scan_gdrive_and_recheck(case_id, gdrive_links))
@@ -473,6 +474,10 @@ async def _scan_gdrive_and_recheck(case_id: str, links: list):
                     "force_reanalyze": False,
                 })
                 resp.raise_for_status()
+
+        # Remap facts after GDrive scan
+        from document_processor import DocumentProcessor
+        await asyncio.to_thread(DocumentProcessor.remap_facts, case_id)
 
         readiness_result = await asyncio.to_thread(rdns.check_readiness, case_id)
         await asyncio.to_thread(notify.dispatch_notifications, case_id, readiness_result)
@@ -812,7 +817,16 @@ async def _do_reanalyze(case_id: str):
             logger.error(f"Reanalyze OneDrive scan failed: {e}")
             results["onedrive_error"] = str(e)
 
-    # 3. Readiness Check
+    # 3. Remap facts with full couple knowledge
+    try:
+        from document_processor import DocumentProcessor
+        remap_result = DocumentProcessor.remap_facts(case_id)
+        results["remap"] = remap_result
+        logger.info(f"Reanalyze remap for {case_id}: {remap_result}")
+    except Exception as e:
+        logger.error(f"Remap after reanalyze failed for {case_id}: {e}")
+
+    # 4. Readiness Check
     try:
         readiness_result = rdns.check_readiness(case_id)
         results["status"] = readiness_result.get("status")
@@ -872,11 +886,19 @@ async def _run_scan_background(case_id: str, folder_id: str, force: bool):
     except Exception as e:
         logger.error(f"Scan background OneDrive failed for {case_id}: {e}")
 
-    # 3. Readiness + Notifications
+    # 3. Remap facts (couple detection) after scan
     try:
-        readiness_result = rdns.check_readiness(case_id)
+        from document_processor import DocumentProcessor
+        remap_result = await asyncio.to_thread(DocumentProcessor.remap_facts, case_id)
+        logger.info(f"Scan background remap for {case_id}: couple={remap_result.get('is_couple')}")
+    except Exception as e:
+        logger.error(f"Remap after scan failed for {case_id}: {e}")
+
+    # 4. Readiness + Notifications
+    try:
+        readiness_result = await asyncio.to_thread(rdns.check_readiness, case_id)
         if scanned > 0:
-            notify.dispatch_notifications(case_id, readiness_result, force=True)
+            await asyncio.to_thread(notify.dispatch_notifications, case_id, readiness_result, True)
     except Exception as e:
         logger.error(f"Readiness after scan failed for {case_id}: {e}")
 
@@ -916,8 +938,12 @@ async def _run_gdrive_background(case_id: str, links: list):
                     resp.raise_for_status()
                     logger.info(f"GDrive background scan triggered for {case_id}")
 
+                # Remap facts after GDrive scan
+                from document_processor import DocumentProcessor
+                await asyncio.to_thread(DocumentProcessor.remap_facts, case_id)
+
                 readiness_result = await asyncio.to_thread(rdns.check_readiness, case_id)
-                notify.dispatch_notifications(case_id, readiness_result, force=True)
+                await asyncio.to_thread(notify.dispatch_notifications, case_id, readiness_result, True)
         else:
             logger.warning(f"[{case_id}] No OneDrive folder — GDrive sync skipped")
     except Exception as e:

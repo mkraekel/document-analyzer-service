@@ -2032,8 +2032,8 @@ async def _process_gdrive_async(case_id: str, links: list):
             if n8n_scan:
                 import httpx
                 headers = {"X-API-Key": n8n_key} if n8n_key else {}
-                async with httpx.AsyncClient(timeout=300) as client:
-                    resp = await client.post(n8n_scan, headers=headers, json={
+                async with httpx.AsyncClient(timeout=300) as http_client:
+                    resp = await http_client.post(n8n_scan, headers=headers, json={
                         "case_id": case_id,
                         "onedrive_folder_id": folder_id,
                         "force_reanalyze": False,

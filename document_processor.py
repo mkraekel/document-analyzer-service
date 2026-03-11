@@ -163,26 +163,102 @@ def _is_primary_applicant(person_name: str, case_applicant_name: str) -> bool:
 
 
 def _extract_names_from_dict(ed: dict) -> list[str]:
-    """Extract person names from a single extracted_data dict."""
+    """
+    Extract person names from a single extracted_data dict.
+    Searches ALL possible name field patterns GPT might output,
+    across all document types (universal).
+    """
+    from difflib import SequenceMatcher
+
     names = []
-    vorname = ed.get("Vorname") or ed.get("vorname") or ""
-    nachname = ed.get("Nachname") or ed.get("nachname") or ""
-    if vorname and nachname:
-        names.append(f"{vorname} {nachname}")
-    ad = ed.get("applicant_data") or {}
-    if isinstance(ad, dict):
-        fn = ad.get("first_name") or ad.get("vorname") or ""
-        ln = ad.get("last_name") or ad.get("nachname") or ""
-        if fn and ln:
-            names.append(f"{fn} {ln}")
+    seen_lower: set[str] = set()
+
+    def _add(first: str, last: str):
+        first = (first or "").strip()
+        last = (last or "").strip()
+        if first and last:
+            full = f"{first} {last}"
+            key = _clean_person_name(full).lower()
+            if key and key not in seen_lower:
+                # Fuzzy-dedup against existing
+                is_dup = any(SequenceMatcher(None, key, s).ratio() >= 0.85 for s in seen_lower)
+                if not is_dup:
+                    seen_lower.add(key)
+                    names.append(full)
+
+    # Top-level Vorname/Nachname (Ausweiskopie, Gehaltsnachweis, etc.)
+    _add(ed.get("Vorname") or ed.get("vorname"),
+         ed.get("Nachname") or ed.get("nachname"))
+
+    # applicant_data sub-dict
+    for key in ("applicant_data", "applicant_data_2"):
+        ad = ed.get(key) or {}
+        if isinstance(ad, dict):
+            _add(ad.get("first_name") or ad.get("vorname") or ad.get("Vorname"),
+                 ad.get("last_name") or ad.get("nachname") or ad.get("Nachname"))
+
+    # Selbstauskunft alternative keys
+    _add(ed.get("applicant_first_name"), ed.get("applicant_last_name"))
+
+    # Name as single field (some docs)
+    for name_key in ("Name", "name", "Antragsteller", "Kontoinhaber",
+                      "Steuerpflichtiger", "Versicherungsnehmer", "Eigentümer",
+                      "Darlehensnehmer", "Mieter", "Vermieter"):
+        val = ed.get(name_key)
+        if val and isinstance(val, str) and " " in val.strip():
+            cleaned = _clean_person_name(val).strip()
+            parts = cleaned.split(None, 1)
+            if len(parts) == 2:
+                _add(parts[0], parts[1])
+
+    # income_data / employment_data sub-dicts (person name embedded)
+    for sub_key in ("income_data", "income_data_2", "employment_data", "employment_data_2"):
+        sub = ed.get(sub_key) or {}
+        if isinstance(sub, dict):
+            _add(sub.get("first_name") or sub.get("vorname") or sub.get("Vorname"),
+                 sub.get("last_name") or sub.get("nachname") or sub.get("Nachname"))
+            # Name as single field in sub-dict
+            n = sub.get("Name") or sub.get("name") or sub.get("Antragsteller")
+            if n and isinstance(n, str) and " " in n.strip():
+                cleaned = _clean_person_name(n).strip()
+                parts = cleaned.split(None, 1)
+                if len(parts) == 2:
+                    _add(parts[0], parts[1])
+
     return names
 
 
 def _collect_person_names_from_docs(case_id: str) -> list[str]:
-    """Sammelt alle Personennamen aus den Dokumenten eines Cases."""
-    names = []
+    """
+    Sammelt alle Personennamen aus den Dokumenten eines Cases.
+    Checks both extracted_data AND the person_name field on each doc record.
+    Uses fuzzy dedup to avoid OCR-variant duplicates.
+    """
+    from difflib import SequenceMatcher
+
+    names: list[str] = []
     docs = db.search_rows("fin_documents", "caseId", case_id) or []
+
+    def _add_unique(name: str):
+        """Add name if not a fuzzy duplicate of existing names."""
+        if not name or not name.strip():
+            return
+        cleaned = _clean_person_name(name).strip()
+        if not cleaned or len(cleaned) < 3:
+            return
+        key = cleaned.lower()
+        for existing in names:
+            if SequenceMatcher(None, key, _clean_person_name(existing).lower()).ratio() >= 0.85:
+                return  # Already have this person
+        names.append(name.strip())
+
     for doc in docs:
+        # 1. Check person_name field on the document record (from meta.person_name)
+        pn = doc.get("person_name")
+        if pn and isinstance(pn, str):
+            _add_unique(pn)
+
+        # 2. Check extracted_data
         ed = doc.get("extracted_data") or {}
         if isinstance(ed, str):
             try:
@@ -195,49 +271,69 @@ def _collect_person_names_from_docs(case_id: str) -> list[str]:
             if not isinstance(item, dict):
                 continue
             for name in _extract_names_from_dict(item):
-                if name not in names:
-                    names.append(name)
+                _add_unique(name)
+
     return names
 
 
 def _detect_is_couple(applicant_name: str, facts: dict, all_person_names: list[str] | None = None) -> bool:
-    """Erkennt ob es sich um ein Paar handelt (zwei Antragsteller)."""
+    """
+    Erkennt ob es sich um ein Paar handelt (zwei Antragsteller).
+    UNIVERSAL: Erkennt Paare unabhängig vom Dokumenttyp.
+    Wenn 2+ klar verschiedene Personen in den Dokumenten auftauchen → Paar.
+    """
+    from difflib import SequenceMatcher
+
     # 1. "und" / "&" im Case-Namen → Paar
     if applicant_name:
         name_lower = applicant_name.lower()
         if " und " in name_lower or " & " in name_lower:
             return True
+
     # 2. Bereits applicant_data_2 mit Vorname/Nachname in Facts → Paar
     ad2 = facts.get("applicant_data_2", {})
     if isinstance(ad2, dict) and (ad2.get("first_name") or ad2.get("vorname")):
         return True
-    # 3. Verschiedene Vornamen in bisherigen Dokumenten → Paar
-    if all_person_names and applicant_name:
-        from difflib import SequenceMatcher
-        case_clean = _clean_person_name(applicant_name).lower()
-        case_parts = case_clean.split()
-        if len(case_parts) >= 2:
-            case_first = case_parts[0]
-            case_last_parts = case_parts[1:]  # Kann mehrteilig sein (von Müller)
-            for pn in all_person_names:
-                pn_clean = _clean_person_name(pn).lower()
-                pn_parts = pn_clean.split()
-                if len(pn_parts) < 2:
-                    continue
-                pn_first = pn_parts[0]
-                pn_last_parts = pn_parts[1:]
-                # Vorname muss verschieden sein
-                if pn_first == case_first:
-                    continue
-                # Nachname muss ähnlich sein (exakt ODER fuzzy >= 0.8)
-                case_last = " ".join(case_last_parts)
-                pn_last = " ".join(pn_last_parts)
-                if case_last == pn_last or SequenceMatcher(None, case_last, pn_last).ratio() >= 0.8:
-                    logger.info(
-                        f"Couple detected: '{applicant_name}' vs person '{pn}' "
-                        f"(last name match: '{case_last}' ~ '{pn_last}', different first names)"
-                    )
-                    return True
+
+    # 3. UNIVERSAL: 2+ distinct person names across ALL docs → Paar
+    #    Cluster names by fuzzy similarity. If 2+ clusters exist → couple.
+    if not all_person_names or len(all_person_names) < 2:
+        return False
+
+    # Build clusters of similar names (same person = one cluster)
+    clusters: list[list[str]] = []
+    for pn in all_person_names:
+        pn_clean = _clean_person_name(pn).lower()
+        if not pn_clean or len(pn_clean) < 3:
+            continue
+        matched = False
+        for cluster in clusters:
+            # Compare against first entry in cluster (representative)
+            rep = _clean_person_name(cluster[0]).lower()
+            # Same person if overall similarity >= 0.75 OR first names match
+            if SequenceMatcher(None, pn_clean, rep).ratio() >= 0.75:
+                cluster.append(pn)
+                matched = True
+                break
+            # Also check: same first name = same person (OCR might garble last name)
+            pn_parts = pn_clean.split()
+            rep_parts = rep.split()
+            if (len(pn_parts) >= 1 and len(rep_parts) >= 1
+                    and pn_parts[0] == rep_parts[0]
+                    and len(pn_parts[0]) >= 3):
+                cluster.append(pn)
+                matched = True
+                break
+        if not matched:
+            clusters.append([pn])
+
+    if len(clusters) >= 2:
+        logger.info(
+            f"Couple detected (universal): {len(clusters)} distinct persons found: "
+            f"{[c[0] for c in clusters]}"
+        )
+        return True
+
     return False
 
 
@@ -1069,14 +1165,23 @@ class DocumentProcessor:
             except Exception as e:
                 logger.error(f"[{case_id}] Facts merge failed for {file.filename}: {e}")
 
-            # 8. Readiness check (lazy import to avoid circular deps)
+            # 8. Remap facts with full couple knowledge
+            #    Every process_single re-evaluates couple detection across ALL docs
+            try:
+                remap_result = self.remap_facts(case_id)
+                if remap_result.get("is_couple"):
+                    logger.info(f"[{case_id}] Couple confirmed after {file.filename}: {remap_result.get('person_names')}")
+            except Exception as e:
+                logger.error(f"[{case_id}] Remap failed after {file.filename}: {e}")
+
+            # 9. Readiness check (lazy import to avoid circular deps)
             try:
                 import readiness as rdns
                 rdns.check_readiness(case_id)
             except Exception as e:
                 logger.error(f"[{case_id}] Readiness check failed after {file.filename}: {e}")
 
-            # 9. Update queue
+            # 10. Update queue
             _queue_update(case_id, file.filename,
                           status="done",
                           doc_type=doc_type,
@@ -1084,7 +1189,7 @@ class DocumentProcessor:
             _queue_cleanup(case_id)
             logger.info(f"[{case_id}] Done processing {file.filename} -> {doc_type}")
 
-        # 10. Return result
+        # 11. Return result
         return {
             "success": True,
             "case_id": case_id,
@@ -1106,4 +1211,102 @@ class DocumentProcessor:
             "total_processing": len([i for i in items if i["status"] == "processing"]),
             "total_done": len([i for i in items if i["status"] == "done"]),
             "total_error": len([i for i in items if i["status"] == "error"]),
+        }
+
+    @staticmethod
+    def remap_facts(case_id: str) -> dict:
+        """
+        Post-processing: Re-map ALL docs' extracted_data → facts with full couple knowledge.
+        Called after n8n scan completes (process_single doesn't know about couple at analysis time).
+
+        1. Collect all person names from all docs
+        2. Detect couple
+        3. Re-map every doc's extracted_data with is_couple awareness
+        4. Save merged facts (replaces existing facts_extracted)
+        """
+        case = cases.load_case(case_id)
+        if not case:
+            return {"success": False, "error": "Case not found"}
+
+        case_name = case.get("applicant_name") or ""
+        docs = db.search_rows("fin_documents", "caseId", case_id) or []
+
+        if not docs:
+            return {"success": True, "remapped": 0, "is_couple": False}
+
+        # 1. Collect all person names
+        all_person_names = _collect_person_names_from_docs(case_id)
+        logger.info(f"[{case_id}] Remap: {len(docs)} docs, persons: {all_person_names}")
+
+        # 2. Detect couple
+        existing_facts = case.get("_facts_extracted", {})
+        is_couple = _detect_is_couple(case_name, existing_facts, all_person_names)
+        logger.info(f"[{case_id}] Remap: is_couple={is_couple}")
+
+        # 3. Re-map all docs — build fresh facts from scratch
+        merged_facts = {}
+        for doc in docs:
+            doc_type = doc.get("doc_type", "Sonstiges")
+            if doc_type in ("error", "Sonstiges"):
+                continue
+            ed = doc.get("extracted_data") or {}
+            if isinstance(ed, str):
+                try:
+                    ed = json.loads(ed)
+                except Exception:
+                    continue
+
+            # For list (multi-person docs like Reisepässe), process each person
+            items = ed if isinstance(ed, list) else [ed]
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                # Determine person name from this item
+                person_name = doc.get("person_name")  # from meta
+                names = _extract_names_from_dict(item)
+                if names:
+                    person_name = names[0]
+
+                new_facts = _map_extracted_to_facts(
+                    doc_type, item,
+                    person_name=person_name,
+                    case_applicant_name=case_name,
+                    is_couple=is_couple,
+                )
+                if new_facts:
+                    merged_facts = cases.merge_facts(merged_facts, new_facts)
+
+        # 4. REPLACE facts_extracted completely (not merge into existing)
+        #    because old facts may have wrong person routing (primary vs _2)
+        if merged_facts:
+            audit = case.get("_audit_log", [])
+            audit.append({
+                "event": "facts_remapped",
+                "ts": datetime.utcnow().isoformat(),
+                "source": "remap:couple_detection",
+                "is_couple": is_couple,
+                "person_names": all_person_names,
+            })
+            audit = audit[-100:]
+            db.update_row("fin_cases", case["_id"], {
+                "facts_extracted": json.dumps(merged_facts),
+                "audit_log": json.dumps(audit),
+            })
+            logger.info(f"[{case_id}] Remap: facts_extracted replaced with {len(merged_facts)} keys")
+
+        # 5. Update applicant name if couple detected
+        if is_couple and len(all_person_names) >= 2:
+            first = all_person_names[0].split()[0] if all_person_names[0] else ""
+            second = all_person_names[1].split()[0] if all_person_names[1] else ""
+            if first and second:
+                couple_name = f"{all_person_names[0]} & {second}"
+                if case_name and case_name != couple_name:
+                    db.update_row("fin_cases", case["_id"], {"applicant_name": couple_name})
+                    logger.info(f"[{case_id}] Updated applicant_name to couple: {couple_name}")
+
+        return {
+            "success": True,
+            "remapped": len(docs),
+            "is_couple": is_couple,
+            "person_names": all_person_names,
         }
