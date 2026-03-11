@@ -17,7 +17,7 @@ from typing import Optional
 import httpx
 
 import case_logic as cases
-import seatable as db
+import db_postgres as db
 from readiness import _compute_effective_view
 
 logger = logging.getLogger(__name__)

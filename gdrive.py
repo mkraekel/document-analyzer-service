@@ -189,39 +189,6 @@ def get_mime_type(filename: str) -> str:
     return MIME_MAP.get(ext, "application/octet-stream")
 
 
-def _upload_to_onedrive(case_id: str, filename: str, file_bytes: bytes, mime: str, onedrive_folder_id: str):
-    """Upload a file to OneDrive via n8n webhook (best-effort, non-blocking)."""
-    import base64
-    import httpx
-
-    webhook_url = os.getenv("N8N_ONEDRIVE_UPLOAD_WEBHOOK", "")
-    if not webhook_url or not onedrive_folder_id:
-        return
-
-    try:
-        b64 = base64.b64encode(file_bytes).decode("utf-8")
-        api_key = os.getenv("N8N_WEBHOOK_API_KEY", "")
-        headers = {"X-API-Key": api_key} if api_key else {}
-        resp = httpx.post(
-            webhook_url,
-            headers=headers,
-            json={
-                "case_id": case_id,
-                "filename": filename,
-                "data_base64": b64,
-                "mime_type": mime,
-                "onedrive_folder_id": onedrive_folder_id,
-            },
-            timeout=60,
-        )
-        if resp.status_code == 200:
-            logger.info(f"[{case_id}] Uploaded to OneDrive: {filename}")
-        else:
-            logger.warning(f"[{case_id}] OneDrive upload failed ({resp.status_code}): {filename}")
-    except Exception as e:
-        logger.warning(f"[{case_id}] OneDrive upload error for {filename}: {e}")
-
-
 def process_google_drive_links(
     case_id: str,
     links: list[str],
@@ -239,11 +206,7 @@ def process_google_drive_links(
             "errors": [str]
         }
     """
-    # Lazy imports to avoid circular dependencies
-    from main import analyze_with_gpt4o, _map_extracted_to_facts, _maybe_update_applicant_name, _detect_is_couple
     import case_logic as cases
-    import seatable as db
-    from datetime import datetime
 
     results = []
     errors = []
@@ -325,158 +288,38 @@ def process_google_drive_links(
             "errors": errors or [f"{files_found} Dateien gefunden, aber keine unterstützten Formate"],
         }
 
-    # 4. Download and analyze each file (Two-Pass: erst analysieren, dann Facts mappen)
-    now_ts = datetime.utcnow().isoformat()
-    doc_rows = []
-    all_new_facts = {}
-    all_person_names = []    # Pass 1: Personennamen sammeln
-    analysis_results = []    # Pass 1: GPT-Ergebnisse sammeln
+    # 4. Download files and process through central pipeline
+    from document_processor import FileInput
+    from main import processor
 
-    import time as _time
-
-    # ── Pass 1: Alle Dokumente analysieren + Personennamen sammeln ──
-    for i, file_info in enumerate(supported_files):
+    files = []
+    for file_info in supported_files:
         fname = file_info.get("name", "unknown")
         fid = file_info["id"]
         try:
-            # Throttle: pause between GPT calls to avoid rate limits (30k TPM)
-            if i > 0:
-                _time.sleep(4)
-
-            # Download
-            logger.info(f"[{case_id}] Downloading: {fname} ({i+1}/{len(supported_files)})")
+            logger.info(f"[{case_id}] Downloading: {fname}")
             file_bytes = download_file(fid)
             mime = get_mime_type(fname)
-
-            # Analyze with GPT-4o (with retry on rate limit)
-            for _attempt in range(3):
-                try:
-                    result = analyze_with_gpt4o(file_bytes, mime, fname)
-                    break
-                except Exception as _gpt_err:
-                    if "429" in str(_gpt_err) or "rate_limit" in str(_gpt_err):
-                        wait = 8 * (_attempt + 1)
-                        logger.warning(f"[{case_id}] Rate limit hit for {fname}, waiting {wait}s (attempt {_attempt+1}/3)")
-                        _time.sleep(wait)
-                        if _attempt == 2:
-                            raise
-                    else:
-                        raise
-            extracted = result.get("extracted_data") or {}
-
-            # Collect for batch insert
-            doc_rows.append({
-                "caseId": case_id,
-                "file_name": fname,
-                "gdrive_file_id": fid,
-                "doc_type": result.get("doc_type", "Sonstiges"),
-                "extracted_data": json.dumps(extracted),
-                "processing_status": "completed",
-                "processed_at": now_ts,
-            })
-
-            # Collect person name + analysis result for Pass 2
-            _person = (result.get("meta") or {}).get("person_name")
-            if _person and _person not in all_person_names:
-                all_person_names.append(_person)
-            analysis_results.append({
-                "doc_type": result.get("doc_type", ""),
-                "extracted": extracted,
-                "person_name": _person,
-                "filename": fname,
-                "file_bytes": file_bytes,
-                "mime": mime,
-                "gdrive_file_id": fid,
-            })
-
-            results.append({
-                "filename": fname,
-                "doc_type": result.get("doc_type"),
-                "success": True,
-                "gdrive_file_id": fid,
-            })
-            files_processed += 1
-            logger.info(f"[{case_id}] Analyzed: {fname} → {result.get('doc_type')}")
-
+            files.append(FileInput(
+                filename=fname, file_bytes=file_bytes, mime_type=mime,
+                gdrive_file_id=fid, source="gdrive",
+            ))
         except Exception as e:
-            err_msg = str(e)
-            logger.error(f"[{case_id}] Failed to process {fname}: {err_msg}")
-            results.append({
-                "filename": fname,
-                "success": False,
-                "error": err_msg,
-                "gdrive_file_id": fid,
-            })
-            errors.append(f"{fname}: {err_msg}")
+            err_msg = f"Download failed for {fname}: {e}"
+            logger.error(f"[{case_id}] {err_msg}")
+            errors.append(err_msg)
+            results.append({"filename": fname, "success": False, "error": str(e), "gdrive_file_id": fid})
 
-    # ── Pass 2: Facts korrekt mappen (jetzt wo alle Personennamen bekannt sind) ──
-    _case_name = case.get("applicant_name") if case else None
-    _is_couple = _detect_is_couple(_case_name or "", all_new_facts, all_person_names)
-    if _is_couple:
-        logger.info(f"[{case_id}] Couple detected from GDrive docs: {all_person_names}")
-    for ar in analysis_results:
-        new_facts = _map_extracted_to_facts(
-            ar["doc_type"], ar["extracted"],
-            person_name=ar["person_name"],
-            case_applicant_name=_case_name,
-            is_couple=_is_couple,
+    if files:
+        batch_result = processor.process_batch(
+            case_id, files, upload_to_onedrive_folder=onedrive_folder_id,
         )
-        if new_facts:
-            all_new_facts = cases.merge_facts(all_new_facts, new_facts)
-        # Applicant name ggf. korrigieren
-        if ar["doc_type"] in ("Ausweiskopie", "Selbstauskunft") and ar["person_name"]:
-            _maybe_update_applicant_name(case_id, ar["person_name"])
-        # Upload to OneDrive (best-effort)
-        if onedrive_folder_id and ar.get("file_bytes"):
-            _upload_to_onedrive(case_id, ar["filename"], ar["file_bytes"], ar["mime"], onedrive_folder_id)
-
-    # 5. Upsert documents (update existing, insert new)
-    if doc_rows:
-        try:
-            existing_docs = db.search_rows("fin_documents", "caseId", case_id)
-            existing_by_name = {}
-            existing_by_gdrive_id = {}
-            for d in existing_docs:
-                fn = d.get("file_name", "")
-                # Index by name (also match legacy "gdrive:" prefix)
-                existing_by_name[fn] = d
-                if fn.startswith("gdrive:"):
-                    existing_by_name[fn[7:]] = d  # map clean name → same doc
-                gid = d.get("gdrive_file_id", "")
-                if gid:
-                    existing_by_gdrive_id[gid] = d
-            rows_to_insert = []
-            for row in doc_rows:
-                fname = row.get("file_name")
-                gid = row.get("gdrive_file_id", "")
-                # Match by gdrive_file_id first, then by filename
-                existing = existing_by_gdrive_id.get(gid) or existing_by_name.get(fname)
-                if existing:
-                    update_data = {
-                        "file_name": fname,  # normalize away "gdrive:" prefix
-                        "gdrive_file_id": gid,
-                        "doc_type": row["doc_type"],
-                        "extracted_data": row["extracted_data"],
-                        "processing_status": row["processing_status"],
-                        "processed_at": row["processed_at"],
-                    }
-                    db.update_row("fin_documents", existing["_id"], update_data)
-                else:
-                    rows_to_insert.append(row)
-            if rows_to_insert:
-                db.batch_create_rows("fin_documents", rows_to_insert)
-            logger.info(f"[{case_id}] Docs upsert: {len(doc_rows) - len(rows_to_insert)} updated, {len(rows_to_insert)} inserted")
-        except Exception as e:
-            logger.error(f"[{case_id}] Docs upsert failed: {e}")
-            errors.append(f"DB save error: {e}")
-
-    # 6. Merge all facts at once
-    if all_new_facts:
-        try:
-            cases.save_facts(case_id, all_new_facts, source="gdrive:batch")
-        except Exception as e:
-            logger.error(f"[{case_id}] Batch facts merge failed: {e}")
-            errors.append(f"Facts merge error: {e}")
+        for r in batch_result.get("results", []):
+            results.append(r)
+            if r.get("success"):
+                files_processed += 1
+            else:
+                errors.append(f"{r.get('filename')}: {r.get('error', 'unknown')}")
 
     return {
         "success": files_processed > 0,

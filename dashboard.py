@@ -14,7 +14,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from typing import Optional
 
-import seatable as db
+import db_postgres as db
 import case_logic as cases
 import readiness as rdns
 from readiness import _compute_effective_view, _find_value, KEY_SEARCH_PATHS

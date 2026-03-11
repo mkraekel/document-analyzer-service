@@ -9,7 +9,7 @@ import logging
 import time
 from datetime import datetime
 from typing import Optional
-import seatable as db
+import db_postgres as db
 
 logger = logging.getLogger(__name__)
 

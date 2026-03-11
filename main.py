@@ -93,7 +93,7 @@ else:
 async def startup_event():
     """Start DB pool init in background so health endpoint responds immediately."""
     import asyncio
-    import seatable as _db
+    import db_postgres as _db
     if hasattr(_db, 'init_pool'):
         # Fire-and-forget: DB init runs in background thread, doesn't block startup
         asyncio.get_event_loop().run_in_executor(None, _db.init_pool)
@@ -711,6 +711,11 @@ def analyze_with_gpt4o(file_bytes: bytes, mime_type: str, filename: str) -> dict
     except Exception as e:
         logger.error(f"OpenAI API Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Document Processor (delegates to document_processor.py) ───────
+from document_processor import DocumentProcessor, FileInput, MIME_MAP as DOC_MIME_MAP
+processor = DocumentProcessor(analyze_fn=analyze_with_gpt4o)
 
 
 class AnalyzeResponse(BaseModel):
@@ -1870,7 +1875,7 @@ async def validate_data(request: ValidationRequest):
 # n8n ruft diese auf – macht selbst nur noch Trigger + OneDrive
 # ============================================================
 
-import seatable as db
+import db_postgres as db
 import case_logic as cases
 import readiness as rdns
 import notify
@@ -2276,86 +2281,23 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
                                parsed_result=parsed, matched_by=match.get("matched_by"), **_log_kwargs)
         return {"action": "triage", "reason": "no_case_match"}
 
-    # 6. Anhänge direkt intern verarbeiten (statt zurück an n8n)
+    # 6. Anhänge direkt intern verarbeiten (delegiert an DocumentProcessor)
     docs_processed = []
-    doc_rows_to_insert = []  # Batch: alle Dokumente sammeln, dann einmal speichern
-    all_new_facts = {}       # Gesammelte Facts aus allen Dokumenten
-    all_person_names = []    # Gesammelte Personennamen aus Dokumenten
-    analysis_results = []    # Pass 1: GPT-Ergebnisse sammeln
     if request.attachments:
-        now_ts = datetime.utcnow().isoformat()
+        files = []
         for filename, b64_data in request.attachments.items():
             try:
                 file_bytes = base64.b64decode(b64_data)
-                ext = filename.split('.')[-1].lower()
-                mime_map = {
-                    'pdf': 'application/pdf', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
-                    'png': 'image/png', 'tiff': 'image/tiff', 'tif': 'image/tiff',
-                    'webp': 'image/webp',
-                }
-                mime = mime_map.get(ext, 'application/octet-stream')
-
-                result = analyze_with_gpt4o(file_bytes, mime, filename)
-                extracted = result.get("extracted_data") or {}
-
-                # Zeile sammeln (nicht einzeln speichern)
-                doc_rows_to_insert.append({
-                    "caseId": case_id,
-                    "file_name": filename,
-                    "doc_type": result.get("doc_type", "Sonstiges"),
-                    "extracted_data": json.dumps(extracted),
-                    "processing_status": "completed",
-                    "processed_at": now_ts,
-                })
-
-                # Ergebnisse sammeln (Facts-Mapping kommt in Pass 2)
-                _person = (result.get("meta") or {}).get("person_name")
-                if _person and _person not in all_person_names:
-                    all_person_names.append(_person)
-                analysis_results.append({
-                    "doc_type": result.get("doc_type", ""),
-                    "extracted": extracted,
-                    "person_name": _person,
-                    "filename": filename,
-                })
-
-                docs_processed.append({"filename": filename, "doc_type": result.get("doc_type"), "success": True})
-                logger.info(f"Attachment processed: {filename} → {result.get('doc_type')}")
-
+                ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+                mime = DOC_MIME_MAP.get(ext, 'application/octet-stream')
+                files.append(FileInput(filename=filename, file_bytes=file_bytes, mime_type=mime, source="email"))
             except Exception as e:
-                logger.error(f"Attachment processing failed for {filename}: {e}")
+                logger.error(f"Attachment decode failed for {filename}: {e}")
                 docs_processed.append({"filename": filename, "success": False, "error": str(e)})
 
-        # Batch: alle Dokumente auf einmal speichern (1 DB call statt N)
-        if doc_rows_to_insert:
-            try:
-                db.batch_create_rows("fin_documents", doc_rows_to_insert)
-            except Exception as e:
-                logger.error(f"Batch insert fin_documents failed: {e}")
-
-        # Pass 2: Jetzt wo ALLE Personennamen bekannt sind → Facts korrekt mappen
-        _is_couple = _detect_is_couple(applicant_name, all_new_facts, all_person_names)
-        if _is_couple:
-            logger.info(f"[{case_id}] Couple detected from {len(all_person_names)} persons: {all_person_names}")
-        for ar in analysis_results:
-            new_facts = _map_extracted_to_facts(
-                ar["doc_type"], ar["extracted"],
-                person_name=ar["person_name"],
-                case_applicant_name=applicant_name,
-                is_couple=_is_couple,
-            )
-            if new_facts:
-                all_new_facts = cases.merge_facts(all_new_facts, new_facts)
-            # Applicant name ggf. korrigieren (bei erster Ausweiskopie)
-            if ar["doc_type"] in ("Ausweiskopie", "Selbstauskunft") and ar["person_name"]:
-                _maybe_update_applicant_name(case_id, ar["person_name"])
-
-        # Gesammelte Facts einmal mergen (1 DB call statt N)
-        if all_new_facts:
-            try:
-                cases.save_facts(case_id, all_new_facts, source="document:batch")
-            except Exception as e:
-                logger.error(f"Batch facts merge failed: {e}")
+        if files:
+            batch_result = processor.process_batch(case_id, files)
+            docs_processed = batch_result.get("results", [])
 
     # 7. Readiness Check + Notifications (immer, nachdem alles verarbeitet ist)
     readiness_result = None
@@ -2408,63 +2350,11 @@ class ProcessDocumentResponse(BaseModel):
     readiness: Optional[dict] = None
     error: Optional[str] = None
 
-# Per-Case Locks: Dokumente desselben Cases sequenziell, verschiedene Cases parallel
-_case_processing_locks: dict[str, asyncio.Lock] = {}
-
-# ── Processing Queue Tracker ──────────────────────────────────────
-# In-Memory Tracking aller laufenden/wartenden Dokument-Verarbeitungen
-# Struktur: { case_id: [ {filename, status, queued_at, started_at, finished_at, doc_type, error} ] }
-_processing_queue: dict[str, list[dict]] = {}
-_QUEUE_MAX_FINISHED = 50  # Max erledigte Items pro Case behalten
-
-
-def _queue_add(case_id: str, filename: str):
-    """Fügt Dokument zur Queue hinzu."""
-    if case_id not in _processing_queue:
-        _processing_queue[case_id] = []
-    _processing_queue[case_id].append({
-        "filename": filename,
-        "status": "queued",
-        "queued_at": datetime.utcnow().isoformat(),
-        "started_at": None,
-        "finished_at": None,
-        "doc_type": None,
-        "error": None,
-    })
-
-
-def _queue_update(case_id: str, filename: str, **kwargs):
-    """Aktualisiert Status eines Queue-Items."""
-    items = _processing_queue.get(case_id, [])
-    for item in items:
-        if item["filename"] == filename and item["status"] not in ("done", "error"):
-            item.update(kwargs)
-            break
-
-
-def _queue_cleanup(case_id: str):
-    """Entfernt alte erledigte Items."""
-    items = _processing_queue.get(case_id, [])
-    active = [i for i in items if i["status"] in ("queued", "processing")]
-    finished = [i for i in items if i["status"] in ("done", "error")]
-    _processing_queue[case_id] = active + finished[-_QUEUE_MAX_FINISHED:]
-
 
 @app.get("/api/dashboard/case/{case_id}/queue")
 async def get_processing_queue(case_id: str):
     """Gibt den aktuellen Verarbeitungsstatus der Queue für einen Case zurück."""
-    items = _processing_queue.get(case_id, [])
-    active = [i for i in items if i["status"] in ("queued", "processing")]
-    recent_done = [i for i in items if i["status"] in ("done", "error")][-20:]
-    return {
-        "case_id": case_id,
-        "active": active,
-        "recent": recent_done,
-        "total_queued": len([i for i in items if i["status"] == "queued"]),
-        "total_processing": len([i for i in items if i["status"] == "processing"]),
-        "total_done": len([i for i in items if i["status"] == "done"]),
-        "total_error": len([i for i in items if i["status"] == "error"]),
-    }
+    return processor.get_queue(case_id)
 
 
 @app.post("/process-document", response_model=ProcessDocumentResponse)
@@ -2481,9 +2371,6 @@ async def process_document(request: ProcessDocumentRequest):
     except Exception as e:
         return ProcessDocumentResponse(success=False, case_id=request.case_id, error=f"Base64 decode failed: {e}")
 
-    # In Queue eintragen + Background-Task starten
-    _queue_add(request.case_id, request.filename)
-
     asyncio.create_task(_process_document_background(
         case_id=request.case_id,
         filename=request.filename,
@@ -2499,678 +2386,14 @@ async def process_document(request: ProcessDocumentRequest):
     )
 
 
-async def _process_document_background(
-    case_id: str, filename: str, file_bytes: bytes,
-    mime_type: str, onedrive_file_id: str = None,
-):
-    """Verarbeitet ein Dokument im Hintergrund mit per-Case Lock."""
-
-    # Per-Case Lock holen/erstellen
-    if case_id not in _case_processing_locks:
-        _case_processing_locks[case_id] = asyncio.Lock()
-    lock = _case_processing_locks[case_id]
-
-    async with lock:
-        _queue_update(case_id, filename, status="processing", started_at=datetime.utcnow().isoformat())
-        logger.info(f"[{case_id}] Processing {filename} (background)")
-
-        # 1. Dokument analysieren (synchron → in Thread auslagern)
-        try:
-            result = await asyncio.to_thread(analyze_with_gpt4o, file_bytes, mime_type, filename)
-        except Exception as e:
-            logger.error(f"[{case_id}] Document analysis failed for {filename}: {e}")
-            _queue_update(case_id, filename, status="error", error=str(e), finished_at=datetime.utcnow().isoformat())
-            db.create_row("fin_documents", {
-                "caseId": case_id,
-                "onedrive_file_id": onedrive_file_id or "",
-                "file_name": filename,
-                "doc_type": "error",
-                "processing_status": "error",
-                "error_message": str(e),
-                "processed_at": datetime.utcnow().isoformat(),
-            })
-            _queue_cleanup(case_id)
-            return
-
-        # 2. In fin_documents speichern (Upsert)
-        extracted = result.get("extracted_data") or {}
-        doc_data = {
-            "doc_type": result.get("doc_type", "Sonstiges"),
-            "extracted_data": json.dumps(extracted),
-            "processing_status": "completed",
-            "processed_at": datetime.utcnow().isoformat(),
-        }
-        existing_doc = None
-        existing_docs = db.search_rows("fin_documents", "caseId", case_id)
-        for d in existing_docs:
-            if onedrive_file_id and d.get("onedrive_file_id") == onedrive_file_id:
-                existing_doc = d
-                break
-            if d.get("file_name") == filename:
-                existing_doc = d
-                break
-        if existing_doc:
-            db.update_row("fin_documents", existing_doc["_id"], doc_data)
-        else:
-            doc_data["caseId"] = case_id
-            doc_data["onedrive_file_id"] = onedrive_file_id or ""
-            doc_data["file_name"] = filename
-            db.create_row("fin_documents", doc_data)
-
-        # 3. Facts in Case mergen
-        try:
-            doc_type = result.get("doc_type", "")
-            _person = (result.get("meta") or {}).get("person_name")
-            _case = cases.load_case(case_id)
-            _case_name = _case.get("applicant_name") if _case else None
-            _existing_facts = _case.get("_facts_extracted", {}) if _case else {}
-            # Collect known person names from existing docs
-            _existing_person_names = _collect_person_names_from_docs(case_id)
-            if _person and _person not in _existing_person_names:
-                _existing_person_names.append(_person)
-            _is_couple = _detect_is_couple(_case_name, _existing_facts, _existing_person_names)
-            new_facts = _map_extracted_to_facts(
-                doc_type, extracted,
-                person_name=_person,
-                case_applicant_name=_case_name,
-                is_couple=_is_couple,
-            )
-            if new_facts:
-                cases.save_facts(case_id, new_facts, source=f"document:{doc_type}")
-
-            if doc_type in ("Ausweiskopie", "Selbstauskunft") and _person:
-                _maybe_update_applicant_name(case_id, _person)
-        except Exception as e:
-            logger.error(f"[{case_id}] Facts merge failed for {filename}: {e}")
-
-        # 4. Readiness Check
-        try:
-            rdns.check_readiness(case_id)
-        except Exception as e:
-            logger.error(f"[{case_id}] Readiness check failed after {filename}: {e}")
-
-        _queue_update(case_id, filename,
-                      status="done",
-                      doc_type=result.get("doc_type"),
-                      finished_at=datetime.utcnow().isoformat())
-        _queue_cleanup(case_id)
-        logger.info(f"[{case_id}] Done processing {filename} → {result.get('doc_type', '?')}")
-
-
-def _detect_is_couple(applicant_name: str, facts: dict, all_person_names: list[str] | None = None) -> bool:
-    """Erkennt ob es sich um ein Paar handelt (zwei Antragsteller)."""
-    # 1. "und" / "&" im Case-Namen → Paar
-    if applicant_name:
-        name_lower = applicant_name.lower()
-        if " und " in name_lower or " & " in name_lower:
-            return True
-    # 2. Bereits applicant_data_2 mit Vorname/Nachname in Facts → Paar
-    ad2 = facts.get("applicant_data_2", {})
-    if isinstance(ad2, dict) and (ad2.get("first_name") or ad2.get("vorname")):
-        return True
-    # 3. Verschiedene Vornamen in bisherigen Dokumenten → Paar
-    if all_person_names and applicant_name:
-        from difflib import SequenceMatcher
-        case_clean = _clean_person_name(applicant_name).lower()
-        case_parts = case_clean.split()
-        if len(case_parts) >= 2:
-            case_first = case_parts[0]
-            case_last_parts = case_parts[1:]  # Kann mehrteilig sein (von Müller)
-            for pn in all_person_names:
-                pn_clean = _clean_person_name(pn).lower()
-                pn_parts = pn_clean.split()
-                if len(pn_parts) < 2:
-                    continue
-                pn_first = pn_parts[0]
-                pn_last_parts = pn_parts[1:]
-                # Vorname muss verschieden sein
-                if pn_first == case_first:
-                    continue
-                # Nachname muss ähnlich sein (exakt ODER fuzzy >= 0.8)
-                case_last = " ".join(case_last_parts)
-                pn_last = " ".join(pn_last_parts)
-                if case_last == pn_last or SequenceMatcher(None, case_last, pn_last).ratio() >= 0.8:
-                    logger.info(
-                        f"Couple detected: '{applicant_name}' vs person '{pn}' "
-                        f"(last name match: '{case_last}' ~ '{pn_last}', different first names)"
-                    )
-                    return True
-    return False
-
-
-def _collect_person_names_from_docs(case_id: str) -> list[str]:
-    """Sammelt alle Personennamen aus den Dokumenten eines Cases."""
-    names = []
-    docs = db.get_rows("fin_documents", "caseId", case_id) or []
-    for doc in docs:
-        ed = doc.get("extracted_data") or {}
-        if isinstance(ed, str):
-            try:
-                ed = json.loads(ed)
-            except Exception:
-                continue
-        # Try various name fields
-        vorname = ed.get("Vorname") or ed.get("vorname") or ""
-        nachname = ed.get("Nachname") or ed.get("nachname") or ""
-        if vorname and nachname:
-            full = f"{vorname} {nachname}"
-            if full not in names:
-                names.append(full)
-        # Also from applicant_data sub-dict
-        ad = ed.get("applicant_data") or {}
-        if isinstance(ad, dict):
-            fn = ad.get("first_name") or ad.get("vorname") or ""
-            ln = ad.get("last_name") or ad.get("nachname") or ""
-            if fn and ln:
-                full = f"{fn} {ln}"
-                if full not in names:
-                    names.append(full)
-    return names
-
-
-def _clean_person_name(name: str) -> str:
-    """Remove titles and honorifics from a person name."""
-    if not name:
-        return ""
-    prefixes = {"herr", "frau", "dr.", "prof.", "dr", "prof", "dipl.", "ing."}
-    parts = name.strip().split()
-    cleaned = [p for p in parts if p.lower() not in prefixes]
-    return " ".join(cleaned)
-
-
-def _is_primary_applicant(person_name: str, case_applicant_name: str) -> bool:
-    """
-    Check if person_name matches the case's primary applicant.
-    Compares first names (fuzzy). If only last name matches but first name
-    is clearly different → NOT primary (likely the partner).
-    Returns True by default if we can't determine.
-    """
-    from difflib import SequenceMatcher
-
-    if not person_name or not case_applicant_name:
-        return True  # Can't determine → default to primary
-
-    pn = _clean_person_name(person_name).lower()
-    cn = _clean_person_name(case_applicant_name).lower()
-
-    # Handle "und"/"&" in names — case_applicant_name may be "Max und Lisa Müller"
-    cn_names = cn.replace(" und ", " ").replace(" & ", " ").split()
-    pn_parts = pn.split()
-
-    # Remove common filler words
-    fillers = {"und", "&", "von", "van", "de", "der", "die", "das"}
-    cn_names = [p for p in cn_names if p not in fillers]
-    pn_parts = [p for p in pn_parts if p not in fillers]
-
-    if not pn_parts or not cn_names:
-        return True
-
-    # Strategy: If we can identify first + last name, compare first names.
-    # A last-name-only match with a different first name means NOT primary.
-    if len(pn_parts) >= 2 and len(cn_names) >= 2:
-        pn_first = pn_parts[0]
-        pn_last = " ".join(pn_parts[1:])
-        # Case name may contain multiple first names (e.g. "Max Lisa Müller")
-        # Try each name in cn_names as potential first name match
-        cn_last = cn_names[-1]  # Last part is likely the surname
-        cn_firsts = cn_names[:-1]  # Everything else is first name(s)
-
-        last_match = (pn_last == cn_last
-                      or SequenceMatcher(None, pn_last, cn_last).ratio() >= 0.8)
-        first_match = any(
-            pn_first == cf or SequenceMatcher(None, pn_first, cf).ratio() >= 0.8
-            for cf in cn_firsts
-        )
-        if last_match and not first_match:
-            # Same family name but different first name → partner, not primary
-            return False
-        if first_match:
-            return True
-
-    # Fallback: any part matches
-    for pp in pn_parts:
-        for cp in cn_names:
-            if pp == cp or (len(pp) > 2 and len(cp) > 2 and SequenceMatcher(None, pp, cp).ratio() >= 0.8):
-                return True
-    return False
-
-
-def _maybe_update_applicant_name(case_id: str, person_name: str):
-    """
-    Update applicant_name if the current one appears to be the broker's name.
-    Only called for identity documents (Ausweiskopie, Selbstauskunft).
-    """
-    if not person_name:
-        return
-    case = cases.load_case(case_id)
-    if not case:
-        return
-    current = (case.get("applicant_name") or "").strip()
-    partner_email = (case.get("partner_email") or "").lower()
-
-    if not current:
-        # No name set yet → set it from document
-        db.update_row("fin_cases", case["_id"], {"applicant_name": person_name})
-        logger.info(f"[{case_id}] applicant_name set from document: '{person_name}'")
-        return
-
-    # Check if current name matches the broker/partner email prefix
-    if not partner_email or "@" not in partner_email:
-        return
-    email_prefix = partner_email.split("@")[0]
-    email_parts = set(email_prefix.replace(".", " ").replace("-", " ").replace("_", " ").lower().split())
-    current_parts = set(current.lower().split())
-
-    # If >= 50% of current name parts appear in the broker email → likely broker name
-    if email_parts and current_parts:
-        overlap = current_parts & email_parts
-        if len(overlap) >= len(current_parts) * 0.5:
-            logger.info(f"[{case_id}] Updating applicant_name: '{current}' -> '{person_name}' (broker name detected)")
-            db.update_row("fin_cases", case["_id"], {"applicant_name": person_name})
-
-
-def _map_extracted_to_facts(doc_type: str, extracted: dict,
-                             person_name: str = None,
-                             case_applicant_name: str = None,
-                             is_couple: bool = False) -> dict:
-    """
-    Mappt extrahierte Dokument-Daten auf facts_extracted Struktur.
-
-    person_name: Name der Person im Dokument (aus meta.person_name)
-    case_applicant_name: Name des Hauptantragstellers aus dem Case
-    is_couple: True wenn bekannt ist, dass es einen zweiten Antragsteller gibt
-
-    Bei Paaren: Wenn person_name nicht zum case_applicant_name passt,
-    werden die Daten unter _2-Keys gespeichert (applicant_data_2, income_data_2, etc.)
-    Bei Einzel-Antragstellern: Immer Primary (verhindert _2 durch OCR-Fehler).
-    """
-    facts = {}
-
-    # Determine person suffix for person-specific doc types
-    is_primary = _is_primary_applicant(person_name, case_applicant_name)
-    if not is_primary and not is_couple:
-        # Kein Paar bekannt → Name-Mismatch ist wahrscheinlich ein OCR-/Extraktionsfehler
-        logger.warning(
-            f"Name mismatch '{person_name}' vs '{case_applicant_name}' "
-            f"aber kein Paar erkannt → behandle als Primary"
-        )
-        is_primary = True
-    suffix = "" if is_primary else "_2"
-
-    if doc_type in ("Ausweiskopie",):
-        _vorname = extracted.get("Vorname")
-        _nachname = extracted.get("Nachname")
-        _gebdat = extracted.get("Geburtsdatum")
-        _gebort = extracted.get("Geburtsort")
-        _nat = extracted.get("Nationalität") or extracted.get("Nationalitaet")
-        facts[f"applicant_data{suffix}"] = {
-            "first_name": _vorname, "vorname": _vorname,
-            "last_name": _nachname, "nachname": _nachname,
-            "birth_date": _gebdat, "geburtsdatum": _gebdat,
-            "birth_place": _gebort, "geburtsort": _gebort,
-            "nationality": _nat, "nationalitaet": _nat,
-        }
-        facts[f"id_data{suffix}"] = {
-            "ausweisnummer": extracted.get("Ausweisnummer"),
-            "gueltig_bis": extracted.get("Gültig bis"),
-        }
-
-    elif doc_type in ("Gehaltsnachweis", "Gehaltsabrechnung", "Gehaltsabrechnung Dezember", "Lohnsteuerbescheinigung"):
-        _arbeitgeber = extracted.get("Arbeitgeber")
-        _netto = extracted.get("Netto")
-        _auszahlung = extracted.get("Auszahlungsbetrag")
-        # Auszahlungsbetrag hat Vorrang vor Netto (Netto ist vor Abzügen wie VWL etc.)
-        _effective_net = _auszahlung or _netto
-        facts[f"income_data{suffix}"] = {
-            "arbeitgeber": _arbeitgeber,
-            "employer": _arbeitgeber,
-            "brutto": extracted.get("Brutto"),
-            "netto": _netto,
-            "auszahlungsbetrag": _auszahlung,
-            "net_income": _effective_net,
-            "steuerklasse": extracted.get("Steuerklasse"),
-        }
-        facts[f"employment_data{suffix}"] = {
-            "arbeitgeber": _arbeitgeber,
-            "employer": _arbeitgeber,
-            "employment_type": "Angestellter",
-        }
-        # Also write to applicant_data so KEY_SEARCH_PATHS can find it
-        _vorname = extracted.get("Vorname")
-        _nachname = extracted.get("Nachname")
-        ad = {
-            "employer": _arbeitgeber,
-            "net_income": _effective_net,
-            "employment_type": "Angestellter",
-        }
-        if _vorname:
-            ad["first_name"] = _vorname
-            ad["vorname"] = _vorname
-        if _nachname:
-            ad["last_name"] = _nachname
-            ad["nachname"] = _nachname
-        facts[f"applicant_data{suffix}"] = ad
-        # Wohnadresse aus Gehaltsnachweis (nur Hauptantragsteller)
-        _street = extracted.get("Strasse") or extracted.get("Straße")
-        _hnr = extracted.get("Hausnummer")
-        _plz = extracted.get("PLZ")
-        _city = extracted.get("Ort") or extracted.get("Stadt")
-        if not suffix and (_street or _plz or _city):
-            facts["address_data"] = {
-                "street": _street,
-                "house_number": _hnr,
-                "zip": _plz,
-                "city": _city,
-            }
-
-    elif doc_type in ("Kontoauszug",):
-        # Kontoauszug is shared / not person-specific
-        facts["banking_data"] = {
-            "bank": extracted.get("Bank"),
-            "iban": extracted.get("IBAN"),
-            "kontostand": extracted.get("Kontostand"),
-        }
-        _miete = extracted.get("Monatliche_Miete") or extracted.get("Monatliche Miete")
-        if _miete:
-            facts["monthly_rent"] = _miete
-
-    elif doc_type in ("Exposé",):
-        # Property data is shared
-        # GPT liefert Adresse manchmal als Objekt {Ort, PLZ, Straße} statt einzeln
-        _addr = extracted.get("Adresse") or extracted.get("Address") or {}
-        if isinstance(_addr, str):
-            _addr = {}  # String-Adresse ignorieren, Einzelfelder bevorzugen
-        _street = (extracted.get("Straße") or extracted.get("Strasse") or extracted.get("street")
-                   or (isinstance(_addr, dict) and (_addr.get("Straße") or _addr.get("Strasse") or _addr.get("StraßE") or _addr.get("street"))))
-        _hnr = (extracted.get("Hausnummer") or extracted.get("house_number")
-                or (isinstance(_addr, dict) and (_addr.get("Hausnummer") or _addr.get("house_number"))))
-        _plz = (extracted.get("PLZ") or extracted.get("zip")
-                or (isinstance(_addr, dict) and (_addr.get("PLZ") or _addr.get("zip"))))
-        _city = (extracted.get("Ort") or extracted.get("Stadt") or extracted.get("city")
-                 or (isinstance(_addr, dict) and (_addr.get("Ort") or _addr.get("Stadt") or _addr.get("city"))))
-        facts["property_data"] = {
-            "purchase_price": extracted.get("Kaufpreis") or extracted.get("purchase_price"),
-            "street": _street or None,
-            "house_number": _hnr or None,
-            "zip": _plz or None,
-            "plz": _plz or None,
-            "city": _city or None,
-            "ort": _city or None,
-            "object_type": extracted.get("Objekttyp") or extracted.get("object_type"),
-            "usage": extracted.get("Nutzungsart") or extracted.get("usage"),
-            "living_space": extracted.get("Wohnfläche") or extracted.get("Wohnflaeche"),
-            "year_built": extracted.get("Baujahr"),
-            "plot_size": extracted.get("Grundstücksgröße") or extracted.get("Grundstuecksgroesse"),
-        }
-
-    elif doc_type in ("Selbstauskunft",):
-        _vorname = extracted.get("Vorname") or extracted.get("applicant_first_name")
-        _nachname = extracted.get("Nachname") or extracted.get("applicant_last_name")
-        _telefon = extracted.get("Telefon") or extracted.get("applicant_phone")
-        _gebdat = extracted.get("Geburtsdatum")
-        _famstand = extracted.get("Familienstand")
-        _beruf = extracted.get("Beruf") or extracted.get("occupation")
-        _anrede = extracted.get("Anrede") or extracted.get("salutation")
-        _steuer_id = extracted.get("Steuer-ID") or extracted.get("Steuer_ID") or extracted.get("tax_id")
-        _besch_seit = extracted.get("Beschäftigt seit") or extracted.get("Beschaeftigt_seit") or extracted.get("employed_since")
-        _kinder = extracted.get("Anzahl Kinder") or extracted.get("Kinder") or extracted.get("children")
-        facts[f"applicant_data{suffix}"] = {
-            "first_name": _vorname, "vorname": _vorname,
-            "last_name": _nachname, "nachname": _nachname,
-            "phone": _telefon, "telefon": _telefon,
-            "email": extracted.get("E-Mail") or extracted.get("applicant_email"),
-            "birth_date": _gebdat, "geburtsdatum": _gebdat,
-            "marital_status": _famstand, "familienstand": _famstand,
-            "occupation": _beruf, "beruf": _beruf,
-            "salutation": _anrede, "anrede": _anrede,
-            "tax_id": _steuer_id, "steuer_id": _steuer_id,
-            "employed_since": _besch_seit, "beschaeftigt_seit": _besch_seit,
-            "children": _kinder, "kinder": _kinder,
-        }
-        if not suffix:  # Adresse nur für Hauptantragsteller
-            facts["address_data"] = {
-                "street": extracted.get("Strasse") or extracted.get("Straße"),
-                "house_number": extracted.get("Hausnummer"),
-                "zip": extracted.get("PLZ"),
-                "city": extracted.get("Ort") or extracted.get("Stadt"),
-            }
-        # Einkommen aus Selbstauskunft
-        _einkommen = extracted.get("Einkommen") or extracted.get("Netto")
-        if _einkommen:
-            facts[f"income_data{suffix}"] = {
-                "net_income": _einkommen,
-                "netto": _einkommen,
-            }
-
-    elif doc_type in ("Kaufvertrag",):
-        facts["property_data"] = {
-            "purchase_price": extracted.get("Kaufpreis") or extracted.get("purchase_price"),
-            "address": extracted.get("Adresse"),
-            "street": extracted.get("Straße") or extracted.get("Strasse") or extracted.get("street"),
-            "house_number": extracted.get("Hausnummer") or extracted.get("house_number"),
-            "zip": extracted.get("PLZ") or extracted.get("zip"),
-            "plz": extracted.get("PLZ"),
-            "city": extracted.get("Ort") or extracted.get("Stadt") or extracted.get("city"),
-            "ort": extracted.get("Ort") or extracted.get("Stadt"),
-        }
-
-    elif doc_type in ("Steuerbescheid",):
-        facts[f"tax_data{suffix}"] = {
-            "tax_year": extracted.get("Steuerjahr"),
-            "taxable_income": extracted.get("zu versteuerndes Einkommen"),
-            "income_employment": extracted.get("Einkünfte aus nichtselbständiger Arbeit") or extracted.get("Einkuenfte_nichtselbstaendig"),
-            "income_self_employment": extracted.get("Einkünfte aus Gewerbebetrieb/selbständiger Arbeit") or extracted.get("Einkuenfte_selbstaendig") or extracted.get("Einkünfte aus Gewerbebetrieb"),
-            "income_rental": extracted.get("Einkünfte aus Vermietung und Verpachtung") or extracted.get("Einkuenfte_vermietung"),
-            "refund_or_payment": extracted.get("Erstattung/Nachzahlung") or extracted.get("Erstattung"),
-        }
-
-    elif doc_type in ("Steuererklärung",):
-        facts[f"tax_data{suffix}"] = {
-            "tax_year": extracted.get("Steuerjahr"),
-            "income_employment": extracted.get("Einkünfte aus nichtselbständiger Arbeit") or extracted.get("Einkuenfte_nichtselbstaendig"),
-            "income_rental": extracted.get("Einkünfte aus Vermietung und Verpachtung") or extracted.get("Einkuenfte_vermietung"),
-            "deductions": extracted.get("Werbungskosten"),
-        }
-
-    elif doc_type in ("BWA",):
-        _gewinn = extracted.get("Vorläufiges Ergebnis") or extracted.get("Gewinn/Verlust") or extracted.get("Gewinn") or extracted.get("profit")
-        facts[f"income_data{suffix}"] = {
-            "profit_last_year": _gewinn,
-            "gewinn_vorjahr": _gewinn,
-            "revenue": extracted.get("Umsatzerlöse") or extracted.get("Umsatz"),
-            "total_costs": extracted.get("Gesamtkosten"),
-        }
-        facts[f"business_data{suffix}"] = {
-            "company_name": extracted.get("Firma") or extracted.get("Unternehmen"),
-            "period": extracted.get("Zeitraum"),
-        }
-        facts[f"employment_data{suffix}"] = {
-            "employment_type": "Selbständiger",
-        }
-        facts[f"applicant_data{suffix}"] = {
-            "employment_type": "Selbständiger",
-            "profit_last_year": _gewinn,
-        }
-
-    elif doc_type in ("Jahresabschluss",):
-        _gewinn = extracted.get("Jahresüberschuss") or extracted.get("Gewinn") or extracted.get("profit")
-        facts[f"income_data{suffix}"] = {
-            "profit_last_year": _gewinn,
-            "gewinn_vorjahr": _gewinn,
-            "revenue": extracted.get("Umsatzerlöse") or extracted.get("Umsatz"),
-            "balance_total": extracted.get("Bilanzsumme"),
-        }
-        facts[f"business_data{suffix}"] = {
-            "company_name": extracted.get("Firma") or extracted.get("Unternehmen"),
-            "year": extracted.get("Jahr"),
-        }
-        facts[f"applicant_data{suffix}"] = {
-            "employment_type": "Selbständiger",
-            "profit_last_year": _gewinn,
-        }
-
-    elif doc_type in ("Summen und Saldenliste",):
-        facts[f"business_data{suffix}"] = {
-            "company_name": extracted.get("Firma") or extracted.get("Unternehmen"),
-            "period": extracted.get("Zeitraum"),
-            "account_balances": extracted.get("Kontensalden"),
-        }
-
-    elif doc_type in ("Renteninfo",):
-        facts[f"pension_data{suffix}"] = {
-            "projected_monthly_pension": extracted.get("Prognostizierte monatliche Rente") or extracted.get("monatliche Rente"),
-            "current_pension_entitlement": extracted.get("Bisher erworbene Rentenansprüche") or extracted.get("erworbene Rentenansprüche"),
-            "insurance_number": extracted.get("Rentenversicherungsnummer"),
-        }
-
-    elif doc_type in ("Eigenkapitalnachweis",):
-        facts["equity_data"] = {
-            "total_equity": extracted.get("Gesamtguthaben") or extracted.get("Gesamtvermögen") or extracted.get("Gesamtvermoegen"),
-            "accounts": extracted.get("Einzelne Konten") or extracted.get("Konten"),
-            "bank": extracted.get("Bank") or extracted.get("Institut"),
-        }
-
-    elif doc_type in ("Depotnachweis",):
-        facts["equity_data"] = {
-            "depot_value": extracted.get("Gesamtdepotwert") or extracted.get("Depotwert"),
-            "bank": extracted.get("Bank") or extracted.get("Broker"),
-        }
-
-    elif doc_type in ("Darlehensvertrag",):
-        facts["existing_loans"] = {
-            "bank": extracted.get("Bank") or extracted.get("Kreditgeber"),
-            "remaining_debt": extracted.get("Restschuld"),
-            "interest_rate": extracted.get("Zinssatz"),
-            "monthly_rate": extracted.get("Monatliche Rate") or extracted.get("Rate"),
-            "end_date": extracted.get("Laufzeitende"),
-        }
-
-    elif doc_type in ("Bausparvertrag",):
-        facts["savings_data"] = {
-            "bausparkasse": extracted.get("Bausparkasse"),
-            "target_amount": extracted.get("Bausparsumme"),
-            "saved_amount": extracted.get("Angespartes Guthaben") or extracted.get("Guthaben"),
-            "tariff": extracted.get("Tarif"),
-            "ready_for_allocation": extracted.get("Zuteilungsreif"),
-        }
-
-    elif doc_type in ("Mietvertrag",):
-        facts["rental_data"] = {
-            "cold_rent": extracted.get("Kaltmiete"),
-            "warm_rent": extracted.get("Warmmiete") or extracted.get("Warmmiete/Nebenkosten"),
-            "tenant": extracted.get("Mieter"),
-            "landlord": extracted.get("Vermieter"),
-            "address": extracted.get("Objektadresse") or extracted.get("Adresse"),
-        }
-
-    elif doc_type in ("Nachweis Krankenversicherung",):
-        facts[f"insurance_data{suffix}"] = {
-            "type": extracted.get("PKV oder GKV") or extracted.get("PKV/GKV") or extracted.get("Versicherungsart"),
-            "monthly_premium": extracted.get("Monatlicher Beitrag") or extracted.get("Beitrag"),
-            "insurer": extracted.get("Versicherer") or extracted.get("Versicherung"),
-        }
-
-    elif doc_type in ("Wohnflächenberechnung",):
-        # Wohnflächenberechnung hat höchste Priorität für living_space
-        wfl = extracted.get("Wohnfläche") or extracted.get("Wohnflaeche") or extracted.get("Gesamtwohnfläche")
-        facts["property_data"] = {
-            "living_space": wfl,
-            "living_space_wfb": wfl,  # Marker: aus Wohnflächenberechnung (hat Vorrang)
-        }
-
-    elif doc_type in ("Baubeschreibung", "Grundriss", "Teilungserklärung", "Modernisierungsaufstellung", "Grundbuch"):
-        # Property-Dokumente: Objektadresse extrahieren, aber living_space NICHT überschreiben
-        _addr = extracted.get("Adresse") or extracted.get("Address") or {}
-        if isinstance(_addr, str):
-            _addr = {}
-        _street = (extracted.get("Straße") or extracted.get("Strasse") or extracted.get("street")
-                   or (isinstance(_addr, dict) and (_addr.get("Straße") or _addr.get("Strasse") or _addr.get("street"))))
-        _hnr = (extracted.get("Hausnummer") or extracted.get("house_number")
-                or (isinstance(_addr, dict) and (_addr.get("Hausnummer") or _addr.get("house_number"))))
-        _plz = (extracted.get("PLZ") or extracted.get("zip")
-                or (isinstance(_addr, dict) and (_addr.get("PLZ") or _addr.get("zip"))))
-        _city = (extracted.get("Ort") or extracted.get("Stadt") or extracted.get("city")
-                 or (isinstance(_addr, dict) and (_addr.get("Ort") or _addr.get("Stadt") or _addr.get("city"))))
-        prop = {}
-        if _street: prop["street"] = _street
-        if _hnr: prop["house_number"] = _hnr
-        if _plz: prop["zip"] = _plz; prop["plz"] = _plz
-        if _city: prop["city"] = _city; prop["ort"] = _city
-        baujahr = extracted.get("Baujahr")
-        if baujahr: prop["year_built"] = baujahr
-        if prop:
-            facts["property_data"] = prop
-
-    elif doc_type in ("Energieausweis",):
-        facts["property_data"] = {
-            "energy_value": extracted.get("Energiekennwert"),
-            "energy_class": extracted.get("Energieeffizienzklasse"),
-            "heating_type": extracted.get("Heizungsart"),
-            "year_built": extracted.get("Baujahr"),
-        }
-
-    elif doc_type in ("Handelsregisterauszug", "Gesellschaftsvertrag"):
-        facts[f"business_data{suffix}"] = {
-            "company_name": extracted.get("Firma"),
-            "seat": extracted.get("Sitz"),
-            "managing_director": extracted.get("Geschäftsführer") or extracted.get("Geschaeftsfuehrer"),
-            "register_number": extracted.get("HRB/HRA-Nummer") or extracted.get("HRB") or extracted.get("HRA"),
-            "legal_form": extracted.get("Rechtsform"),
-        }
-
-    else:
-        # Generischer Fallback: Bekannte Felder aus JEDEM Dokumenttyp extrahieren
-        _GENERIC_PROPERTY_MAP = {
-            "Kaufpreis": "purchase_price", "purchase_price": "purchase_price",
-            "Adresse": "address", "address": "address",
-            "Objekttyp": "object_type", "object_type": "object_type",
-            "Nutzungsart": "usage", "usage": "usage",
-            "Wohnfläche": "living_space", "living_space": "living_space",
-            "Baujahr": "year_built", "year_built": "year_built",
-            "Grundstücksgröße": "plot_size", "plot_size": "plot_size",
-        }
-        _GENERIC_INCOME_MAP = {
-            "Netto": "net_income", "net_income": "net_income",
-            "Brutto": "brutto", "brutto": "brutto",
-            "Arbeitgeber": "employer", "employer": "employer",
-        }
-        _GENERIC_APPLICANT_MAP = {
-            "Vorname": "first_name", "first_name": "first_name",
-            "Nachname": "last_name", "last_name": "last_name",
-            "Geburtsdatum": "birth_date", "birth_date": "birth_date",
-        }
-
-        prop = {}
-        for src_key, dst_key in _GENERIC_PROPERTY_MAP.items():
-            val = extracted.get(src_key)
-            if val is not None and val != "":
-                prop[dst_key] = val
-        if prop:
-            facts["property_data"] = prop
-
-        inc = {}
-        for src_key, dst_key in _GENERIC_INCOME_MAP.items():
-            val = extracted.get(src_key)
-            if val is not None and val != "":
-                inc[dst_key] = val
-        if inc:
-            facts[f"income_data{suffix}"] = inc
-
-        app = {}
-        for src_key, dst_key in _GENERIC_APPLICANT_MAP.items():
-            val = extracted.get(src_key)
-            if val is not None and val != "":
-                app[dst_key] = val
-        if app:
-            facts[f"applicant_data{suffix}"] = app
-
-    # Leere Werte entfernen
-    def clean(d):
-        if isinstance(d, dict):
-            return {k: clean(v) for k, v in d.items() if v is not None and v != ""}
-        return d
-
-    return clean(facts)
+async def _process_document_background(case_id, filename, file_bytes, mime_type, onedrive_file_id=None):
+    """Delegates to processor.process_single() in a background thread."""
+    import asyncio
+    file_input = FileInput(
+        filename=filename, file_bytes=file_bytes, mime_type=mime_type,
+        onedrive_file_id=onedrive_file_id, source="onedrive"
+    )
+    await asyncio.to_thread(processor.process_single, case_id, file_input)
 
 
 class IngestAnswersRequest(BaseModel):
@@ -3432,7 +2655,7 @@ def _count_reminders_in_audit(audit_log: list, current_status: str) -> int:
 def _has_recent_emails(case_id: str, days: int) -> bool:
     """Prüft ob in den letzten X Tagen eine E-Mail für diesen Case eingegangen ist."""
     from datetime import datetime, timedelta
-    import seatable as db
+    import db_postgres as db
 
     cutoff = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M")
     try:
@@ -3542,7 +2765,7 @@ def check_and_send_reminders() -> dict:
         try:
             case_fresh = cases.load_case(case_id)
             if case_fresh:
-                import seatable as db
+                import db_postgres as db
                 audit = case_fresh.get("_audit_log", [])
                 audit.append({
                     "event": "reminder_sent",
@@ -3719,6 +2942,15 @@ async def import_case(request: ImportCaseRequest):
             errors=[str(e)],
             dry_run=request.dry_run,
         )
+
+
+# Re-exports for backward compatibility (gdrive.py imports these from main)
+from document_processor import (  # noqa: E402, F401
+    _detect_is_couple,
+    _map_extracted_to_facts,
+    _maybe_update_applicant_name,
+    _collect_person_names_from_docs,
+)
 
 
 if __name__ == "__main__":
