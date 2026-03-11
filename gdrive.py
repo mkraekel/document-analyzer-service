@@ -240,7 +240,7 @@ def process_google_drive_links(
         }
     """
     # Lazy imports to avoid circular dependencies
-    from main import analyze_with_gpt4o, _map_extracted_to_facts, _maybe_update_applicant_name
+    from main import analyze_with_gpt4o, _map_extracted_to_facts, _maybe_update_applicant_name, _detect_is_couple
     import case_logic as cases
     import seatable as db
     from datetime import datetime
@@ -325,13 +325,16 @@ def process_google_drive_links(
             "errors": errors or [f"{files_found} Dateien gefunden, aber keine unterstützten Formate"],
         }
 
-    # 4. Download and analyze each file
+    # 4. Download and analyze each file (Two-Pass: erst analysieren, dann Facts mappen)
     now_ts = datetime.utcnow().isoformat()
     doc_rows = []
     all_new_facts = {}
+    all_person_names = []    # Pass 1: Personennamen sammeln
+    analysis_results = []    # Pass 1: GPT-Ergebnisse sammeln
 
     import time as _time
 
+    # ── Pass 1: Alle Dokumente analysieren + Personennamen sammeln ──
     for i, file_info in enumerate(supported_files):
         fname = file_info.get("name", "unknown")
         fid = file_info["id"]
@@ -372,24 +375,19 @@ def process_google_drive_links(
                 "processed_at": now_ts,
             })
 
-            # Merge facts (per-person routing)
+            # Collect person name + analysis result for Pass 2
             _person = (result.get("meta") or {}).get("person_name")
-            _case_name = case.get("applicant_name") if case else None
-            new_facts = _map_extracted_to_facts(
-                result.get("doc_type", ""), extracted,
-                person_name=_person,
-                case_applicant_name=_case_name,
-            )
-            if new_facts:
-                all_new_facts = cases.merge_facts(all_new_facts, new_facts)
-
-            # Applicant name ggf. korrigieren
-            if result.get("doc_type") in ("Ausweiskopie", "Selbstauskunft") and _person:
-                _maybe_update_applicant_name(case_id, _person)
-
-            # Upload to OneDrive (best-effort)
-            if onedrive_folder_id:
-                _upload_to_onedrive(case_id, fname, file_bytes, mime, onedrive_folder_id)
+            if _person and _person not in all_person_names:
+                all_person_names.append(_person)
+            analysis_results.append({
+                "doc_type": result.get("doc_type", ""),
+                "extracted": extracted,
+                "person_name": _person,
+                "filename": fname,
+                "file_bytes": file_bytes,
+                "mime": mime,
+                "gdrive_file_id": fid,
+            })
 
             results.append({
                 "filename": fname,
@@ -410,6 +408,27 @@ def process_google_drive_links(
                 "gdrive_file_id": fid,
             })
             errors.append(f"{fname}: {err_msg}")
+
+    # ── Pass 2: Facts korrekt mappen (jetzt wo alle Personennamen bekannt sind) ──
+    _case_name = case.get("applicant_name") if case else None
+    _is_couple = _detect_is_couple(_case_name or "", all_new_facts, all_person_names)
+    if _is_couple:
+        logger.info(f"[{case_id}] Couple detected from GDrive docs: {all_person_names}")
+    for ar in analysis_results:
+        new_facts = _map_extracted_to_facts(
+            ar["doc_type"], ar["extracted"],
+            person_name=ar["person_name"],
+            case_applicant_name=_case_name,
+            is_couple=_is_couple,
+        )
+        if new_facts:
+            all_new_facts = cases.merge_facts(all_new_facts, new_facts)
+        # Applicant name ggf. korrigieren
+        if ar["doc_type"] in ("Ausweiskopie", "Selbstauskunft") and ar["person_name"]:
+            _maybe_update_applicant_name(case_id, ar["person_name"])
+        # Upload to OneDrive (best-effort)
+        if onedrive_folder_id and ar.get("file_bytes"):
+            _upload_to_onedrive(case_id, ar["filename"], ar["file_bytes"], ar["mime"], onedrive_folder_id)
 
     # 5. Upsert documents (update existing, insert new)
     if doc_rows:
