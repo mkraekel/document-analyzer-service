@@ -790,6 +790,9 @@ class DocumentProcessor:
                                 raise
 
                     extracted = result.get("extracted_data") or {}
+                    if isinstance(extracted, list):
+                        extracted = extracted[0] if len(extracted) == 1 and isinstance(extracted[0], dict) else {}
+                        logger.warning(f"[{case_id}] GPT returned list for extracted_data, converted")
                     doc_type = result.get("doc_type", "Sonstiges")
                     _person = (result.get("meta") or {}).get("person_name")
 
@@ -984,6 +987,9 @@ class DocumentProcessor:
                 return {"success": False, "case_id": case_id, "error": str(e)}
 
             extracted = result.get("extracted_data") or {}
+            if isinstance(extracted, list):
+                extracted = extracted[0] if len(extracted) == 1 and isinstance(extracted[0], dict) else {}
+                logger.warning(f"[{case_id}] GPT returned list for extracted_data, converted")
             doc_type = result.get("doc_type", "Sonstiges")
             _person = (result.get("meta") or {}).get("person_name")
 
