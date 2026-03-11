@@ -90,9 +90,11 @@ async def dashboard_stats():
 # ──────────────────────────────────────────
 
 async def _fetch_openai_credits() -> dict:
-    """Fetch current billing info from OpenAI API. Cached for 1 hour."""
+    """
+    Fetch current costs from OpenAI Admin API. Cached for 1 hour.
+    Requires OPENAI_ADMIN_KEY env var (Admin Key from platform.openai.com/settings/organization/admin-keys).
+    """
     import time
-    from datetime import date
 
     now = time.time()
     if (_openai_credits_cache["data"] is not None
@@ -100,53 +102,35 @@ async def _fetch_openai_credits() -> dict:
             and now - _openai_credits_cache["fetched_at"] < _CREDITS_CACHE_TTL):
         return _openai_credits_cache["data"]
 
-    api_key = os.getenv("OPENAI_API_KEY", "")
-    if not api_key:
-        return {"error": "OPENAI_API_KEY not set"}
+    admin_key = os.getenv("OPENAI_ADMIN_KEY", "")
+    if not admin_key:
+        return {"error": "OPENAI_ADMIN_KEY not set"}
 
-    headers = {"Authorization": f"Bearer {api_key}"}
+    headers = {"Authorization": f"Bearer {admin_key}", "Content-Type": "application/json"}
     result = {}
 
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            # 1. Subscription → plan + hard limit
-            sub_resp = await client.get(
-                "https://api.openai.com/v1/dashboard/billing/subscription",
-                headers=headers,
-            )
-            if sub_resp.status_code == 200:
-                sub = sub_resp.json()
-                result["hard_limit_usd"] = sub.get("hard_limit_usd")
-                result["plan"] = sub.get("plan", {}).get("title") if isinstance(sub.get("plan"), dict) else sub.get("plan")
-            else:
-                logger.warning(f"OpenAI subscription endpoint returned {sub_resp.status_code}: {sub_resp.text[:200]}")
-
-            # 2. Credit grants → remaining credits
-            credits_resp = await client.get(
-                "https://api.openai.com/v1/dashboard/billing/credit_grants",
-                headers=headers,
-            )
-            if credits_resp.status_code == 200:
-                cg = credits_resp.json()
-                result["total_granted"] = cg.get("total_granted")
-                result["total_used"] = cg.get("total_used")
-                result["total_available"] = cg.get("total_available")
-            else:
-                logger.warning(f"OpenAI credit_grants endpoint returned {credits_resp.status_code}: {credits_resp.text[:200]}")
-
-            # 3. Usage this month
+            # Costs API: daily spend for current month
+            import calendar
+            from datetime import date
             today = date.today()
-            start = today.replace(day=1).isoformat()
-            usage_resp = await client.get(
-                f"https://api.openai.com/v1/dashboard/billing/usage?start_date={start}&end_date={today.isoformat()}",
+            month_start = int(datetime(today.year, today.month, 1).timestamp())
+
+            costs_resp = await client.get(
+                f"https://api.openai.com/v1/organization/costs?start_time={month_start}&bucket_width=1d",
                 headers=headers,
             )
-            if usage_resp.status_code == 200:
-                usage = usage_resp.json()
-                # total_usage is in cents
-                result["used_usd"] = round(usage.get("total_usage", 0) / 100, 2)
+            if costs_resp.status_code == 200:
+                costs_data = costs_resp.json()
+                total_cents = 0
+                for bucket in costs_data.get("data", []):
+                    for item in bucket.get("results", []):
+                        amount = item.get("amount", {})
+                        total_cents += amount.get("value", 0)
+                result["used_usd"] = round(total_cents / 100, 2)
             else:
-                logger.warning(f"OpenAI usage endpoint returned {usage_resp.status_code}: {usage_resp.text[:200]}")
+                logger.warning(f"OpenAI costs endpoint returned {costs_resp.status_code}: {costs_resp.text[:200]}")
 
         result["fetched_at"] = datetime.utcnow().isoformat()
         _openai_credits_cache["data"] = result
