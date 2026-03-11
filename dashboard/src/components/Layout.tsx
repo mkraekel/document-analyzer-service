@@ -1,7 +1,9 @@
 import { NavLink, Outlet } from 'react-router-dom'
-import { LayoutDashboard, Inbox, Briefcase, Mail, LogOut, Menu, X } from 'lucide-react'
-import { useState } from 'react'
+import { LayoutDashboard, Inbox, Briefcase, Mail, LogOut, Menu, X, Zap } from 'lucide-react'
+import { useState, useEffect } from 'react'
 import { useAuth } from '../context/AuthContext'
+import { api } from '../api/client'
+import type { OpenAICredits } from '../types/api'
 
 const navItems = [
   { to: '/app', label: 'Übersicht', icon: LayoutDashboard, end: true },
@@ -9,6 +11,37 @@ const navItems = [
   { to: '/app/cases', label: 'Cases', icon: Briefcase, end: false },
   { to: '/app/emails', label: 'Ausgehende Mails', icon: Mail, end: false },
 ]
+
+function OpenAICreditsDisplay() {
+  const [credits, setCredits] = useState<OpenAICredits | null>(null)
+
+  useEffect(() => {
+    const fetchCredits = async () => {
+      try {
+        const data = await api.get<OpenAICredits>('/api/dashboard/openai-credits')
+        setCredits(data)
+      } catch {
+        // silently ignore
+      }
+    }
+    fetchCredits()
+    const interval = setInterval(fetchCredits, 3600_000) // refresh every hour
+    return () => clearInterval(interval)
+  }, [])
+
+  if (!credits || credits.error || credits.used_usd == null) return null
+
+  const used = credits.used_usd
+  const limit = credits.hard_limit_usd
+  const pct = limit ? Math.round((used / limit) * 100) : null
+
+  return (
+    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gray-100 text-xs font-medium text-gray-600" title={`OpenAI Kosten diesen Monat${limit ? ` (Limit: $${limit})` : ''}`}>
+      <Zap size={12} className={pct && pct > 80 ? 'text-red-500' : 'text-amber-500'} />
+      <span>${used.toFixed(2)}{limit ? <span className="text-gray-400"> / ${limit}</span> : null}</span>
+    </div>
+  )
+}
 
 export function Layout() {
   const { user, logout } = useAuth()
@@ -70,12 +103,15 @@ export function Layout() {
 
       {/* Main */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Top bar (mobile) */}
-        <header className="lg:hidden flex items-center gap-3 px-4 py-3 bg-white border-b border-gray-200">
-          <button onClick={() => setSidebarOpen(true)} className="p-1">
-            {sidebarOpen ? <X size={20} /> : <Menu size={20} />}
-          </button>
-          <h1 className="text-lg font-bold text-gray-900">Finanzierung</h1>
+        {/* Top bar */}
+        <header className="flex items-center justify-between px-4 py-3 bg-white border-b border-gray-200">
+          <div className="flex items-center gap-3">
+            <button onClick={() => setSidebarOpen(true)} className="p-1 lg:hidden">
+              {sidebarOpen ? <X size={20} /> : <Menu size={20} />}
+            </button>
+            <h1 className="text-lg font-bold text-gray-900 lg:hidden">Finanzierung</h1>
+          </div>
+          <OpenAICreditsDisplay />
         </header>
 
         <main className="flex-1 overflow-y-auto p-4 lg:p-8">

@@ -131,6 +131,14 @@ export interface LoginResponse {
   user: string
 }
 
+export interface OpenAICredits {
+  hard_limit_usd?: number
+  plan?: string
+  used_usd?: number
+  fetched_at?: string
+  error?: string
+}
+
 export interface ApiResponse<T = unknown> {
   success?: boolean
   error?: string

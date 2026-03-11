@@ -27,6 +27,10 @@ N8N_WEBHOOK_API_KEY = os.getenv("N8N_WEBHOOK_API_KEY", "")
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# ── OpenAI Credits Cache ─────────────────────────────────────────
+_openai_credits_cache: dict = {"data": None, "fetched_at": None}
+_CREDITS_CACHE_TTL = 3600  # 1 hour
+
 def _n8n_headers() -> dict:
     """Returns auth headers for n8n webhook calls."""
     if N8N_WEBHOOK_API_KEY:
@@ -80,6 +84,91 @@ async def dashboard_stats():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ──────────────────────────────────────────
+# API: OpenAI Credits
+# ──────────────────────────────────────────
+
+async def _fetch_openai_credits() -> dict:
+    """Fetch current billing info from OpenAI API. Cached for 1 hour."""
+    import time
+
+    now = time.time()
+    if (_openai_credits_cache["data"] is not None
+            and _openai_credits_cache["fetched_at"]
+            and now - _openai_credits_cache["fetched_at"] < _CREDITS_CACHE_TTL):
+        return _openai_credits_cache["data"]
+
+    api_key = os.getenv("OPENAI_API_KEY", "")
+    if not api_key:
+        return {"error": "OPENAI_API_KEY not set"}
+
+    headers = {"Authorization": f"Bearer {api_key}"}
+    result = {}
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            # 1. Get subscription (total limit)
+            sub_resp = await client.get(
+                "https://api.openai.com/v1/organization/subscription",
+                headers=headers,
+            )
+            if sub_resp.status_code == 200:
+                sub = sub_resp.json()
+                result["hard_limit_usd"] = sub.get("hard_limit_usd")
+                result["plan"] = sub.get("plan", {}).get("title")
+            else:
+                # Try dashboard endpoint as fallback
+                sub_resp2 = await client.get(
+                    "https://api.openai.com/dashboard/billing/subscription",
+                    headers=headers,
+                )
+                if sub_resp2.status_code == 200:
+                    sub = sub_resp2.json()
+                    result["hard_limit_usd"] = sub.get("hard_limit_usd")
+                    result["plan"] = sub.get("plan", {}).get("title")
+
+            # 2. Get usage for current month
+            from datetime import date
+            today = date.today()
+            start = today.replace(day=1).isoformat()
+            end = (today.replace(day=28) + __import__('datetime').timedelta(days=4)).replace(day=1).isoformat()
+
+            usage_resp = await client.get(
+                f"https://api.openai.com/v1/organization/costs?start_date={start}&end_date={end}",
+                headers=headers,
+            )
+            if usage_resp.status_code == 200:
+                usage_data = usage_resp.json()
+                # Sum up all costs
+                total_cents = 0
+                for bucket in usage_data.get("data", []):
+                    for cost in bucket.get("results", []):
+                        total_cents += cost.get("amount", {}).get("value", 0)
+                result["used_usd"] = round(total_cents / 100, 2)
+            else:
+                # Fallback: dashboard billing usage
+                usage_resp2 = await client.get(
+                    f"https://api.openai.com/dashboard/billing/usage?start_date={start}&end_date={today.isoformat()}",
+                    headers=headers,
+                )
+                if usage_resp2.status_code == 200:
+                    result["used_usd"] = round(usage_resp2.json().get("total_usage", 0) / 100, 2)
+
+        result["fetched_at"] = datetime.utcnow().isoformat()
+        _openai_credits_cache["data"] = result
+        _openai_credits_cache["fetched_at"] = now
+    except Exception as e:
+        logger.error(f"OpenAI credits fetch failed: {e}")
+        result["error"] = str(e)
+
+    return result
+
+
+@router.get("/api/dashboard/openai-credits")
+async def dashboard_openai_credits():
+    return await _fetch_openai_credits()
 
 
 # ──────────────────────────────────────────
