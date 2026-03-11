@@ -818,10 +818,6 @@ class DocumentProcessor:
                         "extracted": extracted,
                         "person_name": _person,
                         "filename": fname,
-                        "file_bytes": file_input.file_bytes,
-                        "mime": file_input.mime_type,
-                        "gdrive_file_id": file_input.gdrive_file_id,
-                        "onedrive_file_id": file_input.onedrive_file_id,
                     })
 
                     results.append(FileResult(
@@ -831,6 +827,10 @@ class DocumentProcessor:
                         person_name=_person,
                     ))
                     files_processed += 1
+
+                    # Upload to OneDrive immediately after analysis (best-effort)
+                    if upload_to_onedrive_folder and file_input.file_bytes:
+                        _upload_to_onedrive(case_id, fname, file_input.file_bytes, file_input.mime_type, upload_to_onedrive_folder)
 
                     _queue_update(case_id, fname, status="done", doc_type=doc_type, finished_at=datetime.utcnow().isoformat())
                     logger.info(f"[{case_id}] Analyzed: {fname} -> {doc_type}")
@@ -860,10 +860,6 @@ class DocumentProcessor:
                 # Applicant name correction for identity docs
                 if ar["doc_type"] in ("Ausweiskopie", "Selbstauskunft") and ar["person_name"]:
                     _maybe_update_applicant_name(case_id, ar["person_name"])
-
-                # Upload to OneDrive (best-effort)
-                if upload_to_onedrive_folder and ar.get("file_bytes"):
-                    _upload_to_onedrive(case_id, ar["filename"], ar["file_bytes"], ar["mime"], upload_to_onedrive_folder)
 
             # 6. Batch-upsert doc rows (match by gdrive_file_id, then onedrive_file_id, then filename)
             if doc_rows:
