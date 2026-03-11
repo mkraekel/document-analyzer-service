@@ -2042,7 +2042,7 @@ async def _process_gdrive_async(case_id: str, links: list):
                     logger.info(f"[{case_id}] OneDrive scan triggered after GDrive sync")
 
                 readiness_result = await asyncio.to_thread(rdns.check_readiness, case_id)
-                notify.dispatch_notifications(case_id, readiness_result)
+                await asyncio.to_thread(notify.dispatch_notifications, case_id, readiness_result)
     except Exception as e:
         logger.error(f"[{case_id}] Google Drive async processing failed: {e}")
 

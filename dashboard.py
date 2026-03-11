@@ -447,19 +447,35 @@ async def dashboard_action(case_id: str, req: ActionRequest):
 
 
 async def _scan_gdrive_and_recheck(case_id: str, links: list):
-    """Background: scan Google Drive folders for new files, analyze them, then recheck."""
+    """Background: sync GDrive → OneDrive, trigger n8n scan, then recheck."""
     import asyncio
     try:
+        _case = cases.load_case(case_id)
+        folder_id = _case.get("onedrive_folder_id", "") if _case else ""
+        if not folder_id:
+            logger.warning(f"[{case_id}] No OneDrive folder — GDrive RECHECK skipped")
+            return
+
         import gdrive
-        result = await asyncio.to_thread(
-            gdrive.process_google_drive_links, case_id=case_id, links=links
+        sync_result = await asyncio.to_thread(
+            gdrive.sync_to_onedrive,
+            case_id=case_id, links=links, onedrive_folder_id=folder_id,
         )
-        processed = result.get("files_processed", 0)
-        logger.info(f"[{case_id}] GDrive scan on RECHECK: {processed} new files")
-        if processed > 0:
-            readiness_result = await asyncio.to_thread(rdns.check_readiness, case_id)
-            import notify
-            notify.dispatch_notifications(case_id, readiness_result)
+        uploaded = sync_result.get("files_uploaded", 0)
+        logger.info(f"[{case_id}] GDrive sync on RECHECK: {uploaded} uploaded")
+
+        # Trigger n8n scan to analyze any new files
+        if uploaded > 0 and N8N_SCAN_WEBHOOK:
+            async with httpx.AsyncClient(timeout=300) as client:
+                resp = await client.post(N8N_SCAN_WEBHOOK, headers=_n8n_headers(), json={
+                    "case_id": case_id,
+                    "onedrive_folder_id": folder_id,
+                    "force_reanalyze": False,
+                })
+                resp.raise_for_status()
+
+        readiness_result = await asyncio.to_thread(rdns.check_readiness, case_id)
+        await asyncio.to_thread(notify.dispatch_notifications, case_id, readiness_result)
     except Exception as e:
         logger.error(f"[{case_id}] GDrive scan on RECHECK failed: {e}")
 
