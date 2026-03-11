@@ -290,7 +290,15 @@ def process_google_drive_links(
 
     # 4. Download files and process through central pipeline
     from document_processor import FileInput
-    from main import processor
+    try:
+        from main import processor
+    except Exception as _imp_err:
+        logger.error(f"[{case_id}] Failed to import processor: {_imp_err}")
+        errors.append(f"Import error: {_imp_err}")
+        return {
+            "success": False, "files_found": files_found, "files_processed": 0,
+            "files_skipped": files_skipped, "results": results, "errors": errors,
+        }
 
     files = []
     for file_info in supported_files:
