@@ -10,7 +10,6 @@ import traceback
 import httpx
 from datetime import datetime
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from typing import Optional
 
@@ -93,6 +92,7 @@ async def dashboard_stats():
 async def _fetch_openai_credits() -> dict:
     """Fetch current billing info from OpenAI API. Cached for 1 hour."""
     import time
+    from datetime import date
 
     now = time.time()
     if (_openai_credits_cache["data"] is not None
@@ -109,56 +109,49 @@ async def _fetch_openai_credits() -> dict:
 
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            # 1. Get subscription (total limit)
+            # 1. Subscription → plan + hard limit
             sub_resp = await client.get(
-                "https://api.openai.com/v1/organization/subscription",
+                "https://api.openai.com/v1/dashboard/billing/subscription",
                 headers=headers,
             )
             if sub_resp.status_code == 200:
                 sub = sub_resp.json()
                 result["hard_limit_usd"] = sub.get("hard_limit_usd")
-                result["plan"] = sub.get("plan", {}).get("title")
+                result["plan"] = sub.get("plan", {}).get("title") if isinstance(sub.get("plan"), dict) else sub.get("plan")
             else:
-                # Try dashboard endpoint as fallback
-                sub_resp2 = await client.get(
-                    "https://api.openai.com/dashboard/billing/subscription",
-                    headers=headers,
-                )
-                if sub_resp2.status_code == 200:
-                    sub = sub_resp2.json()
-                    result["hard_limit_usd"] = sub.get("hard_limit_usd")
-                    result["plan"] = sub.get("plan", {}).get("title")
+                logger.warning(f"OpenAI subscription endpoint returned {sub_resp.status_code}: {sub_resp.text[:200]}")
 
-            # 2. Get usage for current month
-            from datetime import date
+            # 2. Credit grants → remaining credits
+            credits_resp = await client.get(
+                "https://api.openai.com/v1/dashboard/billing/credit_grants",
+                headers=headers,
+            )
+            if credits_resp.status_code == 200:
+                cg = credits_resp.json()
+                result["total_granted"] = cg.get("total_granted")
+                result["total_used"] = cg.get("total_used")
+                result["total_available"] = cg.get("total_available")
+            else:
+                logger.warning(f"OpenAI credit_grants endpoint returned {credits_resp.status_code}: {credits_resp.text[:200]}")
+
+            # 3. Usage this month
             today = date.today()
             start = today.replace(day=1).isoformat()
-            end = (today.replace(day=28) + __import__('datetime').timedelta(days=4)).replace(day=1).isoformat()
-
             usage_resp = await client.get(
-                f"https://api.openai.com/v1/organization/costs?start_date={start}&end_date={end}",
+                f"https://api.openai.com/v1/dashboard/billing/usage?start_date={start}&end_date={today.isoformat()}",
                 headers=headers,
             )
             if usage_resp.status_code == 200:
-                usage_data = usage_resp.json()
-                # Sum up all costs
-                total_cents = 0
-                for bucket in usage_data.get("data", []):
-                    for cost in bucket.get("results", []):
-                        total_cents += cost.get("amount", {}).get("value", 0)
-                result["used_usd"] = round(total_cents / 100, 2)
+                usage = usage_resp.json()
+                # total_usage is in cents
+                result["used_usd"] = round(usage.get("total_usage", 0) / 100, 2)
             else:
-                # Fallback: dashboard billing usage
-                usage_resp2 = await client.get(
-                    f"https://api.openai.com/dashboard/billing/usage?start_date={start}&end_date={today.isoformat()}",
-                    headers=headers,
-                )
-                if usage_resp2.status_code == 200:
-                    result["used_usd"] = round(usage_resp2.json().get("total_usage", 0) / 100, 2)
+                logger.warning(f"OpenAI usage endpoint returned {usage_resp.status_code}: {usage_resp.text[:200]}")
 
         result["fetched_at"] = datetime.utcnow().isoformat()
         _openai_credits_cache["data"] = result
         _openai_credits_cache["fetched_at"] = now
+        logger.info(f"OpenAI credits fetched: {result}")
     except Exception as e:
         logger.error(f"OpenAI credits fetch failed: {e}")
         result["error"] = str(e)

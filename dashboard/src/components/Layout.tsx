@@ -29,16 +29,31 @@ function OpenAICreditsDisplay() {
     return () => clearInterval(interval)
   }, [])
 
-  if (!credits || credits.error || credits.used_usd == null) return null
+  if (!credits || credits.error) return null
 
+  // Show either: monthly usage or remaining credit balance
   const used = credits.used_usd
   const limit = credits.hard_limit_usd
-  const pct = limit ? Math.round((used / limit) * 100) : null
+  const available = credits.total_available
+
+  // Nothing useful to show
+  if (used == null && available == null) return null
+
+  const pct = limit && used != null ? Math.round((used / limit) * 100) : null
+  const isWarning = pct != null && pct > 80
 
   return (
-    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gray-100 text-xs font-medium text-gray-600" title={`OpenAI Kosten diesen Monat${limit ? ` (Limit: $${limit})` : ''}`}>
-      <Zap size={12} className={pct && pct > 80 ? 'text-red-500' : 'text-amber-500'} />
-      <span>${used.toFixed(2)}{limit ? <span className="text-gray-400"> / ${limit}</span> : null}</span>
+    <div
+      className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gray-100 text-xs font-medium text-gray-600"
+      title={[
+        used != null ? `Verbrauch diesen Monat: $${used.toFixed(2)}` : '',
+        limit ? `Limit: $${limit}` : '',
+        available != null ? `Guthaben: $${available.toFixed(2)}` : '',
+      ].filter(Boolean).join(' · ')}
+    >
+      <Zap size={12} className={isWarning ? 'text-red-500' : 'text-amber-500'} />
+      {used != null && <span>${used.toFixed(2)}{limit ? <span className="text-gray-400"> / ${limit}</span> : null}</span>}
+      {available != null && <span className="text-green-600">${available.toFixed(2)} left</span>}
     </div>
   )
 }

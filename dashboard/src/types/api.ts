@@ -135,6 +135,9 @@ export interface OpenAICredits {
   hard_limit_usd?: number
   plan?: string
   used_usd?: number
+  total_granted?: number
+  total_used?: number
+  total_available?: number
   fetched_at?: string
   error?: string
 }
