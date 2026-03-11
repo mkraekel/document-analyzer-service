@@ -2277,13 +2277,12 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
         )
         needs_folder = True  # n8n soll OneDrive-Ordner erstellen
 
-        # Finlink Lead im Hintergrund erstellen
+        # Finlink Lead erstellen (wir sind bereits im Thread)
         import import_builder
-        asyncio.get_event_loop().run_in_executor(
-            None,
-            import_builder.create_finlink_lead,
-            case_id, facts, applicant_name, partner_email_for_case,
-        )
+        try:
+            import_builder.create_finlink_lead(case_id, facts, applicant_name, partner_email_for_case)
+        except Exception as _fl_err:
+            logger.error(f"[{case_id}] Finlink lead creation failed: {_fl_err}")
 
     elif match["action"] == "update":
         cases.update_case_conversation(case_id, request.conversation_id)
