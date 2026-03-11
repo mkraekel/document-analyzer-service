@@ -162,6 +162,22 @@ def _is_primary_applicant(person_name: str, case_applicant_name: str) -> bool:
     return False
 
 
+def _extract_names_from_dict(ed: dict) -> list[str]:
+    """Extract person names from a single extracted_data dict."""
+    names = []
+    vorname = ed.get("Vorname") or ed.get("vorname") or ""
+    nachname = ed.get("Nachname") or ed.get("nachname") or ""
+    if vorname and nachname:
+        names.append(f"{vorname} {nachname}")
+    ad = ed.get("applicant_data") or {}
+    if isinstance(ad, dict):
+        fn = ad.get("first_name") or ad.get("vorname") or ""
+        ln = ad.get("last_name") or ad.get("nachname") or ""
+        if fn and ln:
+            names.append(f"{fn} {ln}")
+    return names
+
+
 def _collect_person_names_from_docs(case_id: str) -> list[str]:
     """Sammelt alle Personennamen aus den Dokumenten eines Cases."""
     names = []
@@ -173,22 +189,14 @@ def _collect_person_names_from_docs(case_id: str) -> list[str]:
                 ed = json.loads(ed)
             except Exception:
                 continue
-        # Try various name fields
-        vorname = ed.get("Vorname") or ed.get("vorname") or ""
-        nachname = ed.get("Nachname") or ed.get("nachname") or ""
-        if vorname and nachname:
-            full = f"{vorname} {nachname}"
-            if full not in names:
-                names.append(full)
-        # Also from applicant_data sub-dict
-        ad = ed.get("applicant_data") or {}
-        if isinstance(ad, dict):
-            fn = ad.get("first_name") or ad.get("vorname") or ""
-            ln = ad.get("last_name") or ad.get("nachname") or ""
-            if fn and ln:
-                full = f"{fn} {ln}"
-                if full not in names:
-                    names.append(full)
+        # Handle list (e.g. Reisepässe with 2 persons)
+        items = ed if isinstance(ed, list) else [ed]
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            for name in _extract_names_from_dict(item):
+                if name not in names:
+                    names.append(name)
     return names
 
 
@@ -789,10 +797,17 @@ class DocumentProcessor:
                             else:
                                 raise
 
-                    extracted = result.get("extracted_data") or {}
+                    extracted_raw = result.get("extracted_data") or {}
+                    extracted = extracted_raw
                     if isinstance(extracted, list):
-                        extracted = extracted[0] if len(extracted) == 1 and isinstance(extracted[0], dict) else {}
-                        logger.warning(f"[{case_id}] GPT returned list for extracted_data, converted")
+                        # Multi-person doc (e.g. Reisepässe) — collect all names, use first as primary
+                        for _item in extracted:
+                            if isinstance(_item, dict):
+                                for _n in _extract_names_from_dict(_item):
+                                    if _n not in all_person_names:
+                                        all_person_names.append(_n)
+                        extracted = extracted[0] if extracted and isinstance(extracted[0], dict) else {}
+                        logger.info(f"[{case_id}] Multi-person doc: {all_person_names}")
                     doc_type = result.get("doc_type", "Sonstiges")
                     _person = (result.get("meta") or {}).get("person_name")
 
@@ -800,12 +815,12 @@ class DocumentProcessor:
                     if _person and _person not in all_person_names:
                         all_person_names.append(_person)
 
-                    # Build doc row for DB insert
+                    # Build doc row for DB insert (store original list if multi-person)
                     doc_row = {
                         "caseId": case_id,
                         "file_name": fname,
                         "doc_type": doc_type,
-                        "extracted_data": json.dumps(extracted),
+                        "extracted_data": json.dumps(extracted_raw),
                         "processing_status": "completed",
                         "processed_at": now_ts,
                     }
@@ -986,17 +1001,22 @@ class DocumentProcessor:
                 _queue_cleanup(case_id)
                 return {"success": False, "case_id": case_id, "error": str(e)}
 
-            extracted = result.get("extracted_data") or {}
+            extracted_raw = result.get("extracted_data") or {}
+            extracted = extracted_raw
             if isinstance(extracted, list):
-                extracted = extracted[0] if len(extracted) == 1 and isinstance(extracted[0], dict) else {}
-                logger.warning(f"[{case_id}] GPT returned list for extracted_data, converted")
+                # Multi-person doc — collect all names for couple detection
+                for _item in extracted:
+                    if isinstance(_item, dict):
+                        for _n in _extract_names_from_dict(_item):
+                            logger.info(f"[{case_id}] Multi-person doc name: {_n}")
+                extracted = extracted[0] if extracted and isinstance(extracted[0], dict) else {}
             doc_type = result.get("doc_type", "Sonstiges")
             _person = (result.get("meta") or {}).get("person_name")
 
-            # 6. Upsert single doc row
+            # 6. Upsert single doc row (store original list if multi-person)
             doc_data = {
                 "doc_type": doc_type,
-                "extracted_data": json.dumps(extracted),
+                "extracted_data": json.dumps(extracted_raw),
                 "processing_status": "completed",
                 "processed_at": datetime.utcnow().isoformat(),
             }
