@@ -189,63 +189,18 @@ def get_mime_type(filename: str) -> str:
     return MIME_MAP.get(ext, "application/octet-stream")
 
 
-def process_google_drive_links(
-    case_id: str,
-    links: list[str],
-) -> dict:
+def _collect_gdrive_files(case_id: str, links: list[str]) -> tuple[list[dict], list[str]]:
     """
-    Main function: Download and analyze all files from Google Drive links.
-
-    Returns:
-        {
-            "success": True/False,
-            "files_found": int,
-            "files_processed": int,
-            "files_skipped": int,
-            "results": [{filename, doc_type, success, error?}],
-            "errors": [str]
-        }
+    Collect all supported files from Google Drive links.
+    Returns (files_list, errors) where files_list = [{id, name, mimeType, size}, ...]
     """
-    import case_logic as cases
-
-    results = []
     errors = []
-    files_found = 0
-    files_processed = 0
-    files_skipped = 0
-
-    # 1. Extract IDs from links
     drive_ids = extract_drive_ids(links)
     if not drive_ids:
-        return {
-            "success": False,
-            "files_found": 0,
-            "files_processed": 0,
-            "files_skipped": 0,
-            "results": [],
-            "errors": ["Keine gültigen Google Drive Links gefunden"],
-        }
+        return [], ["Keine gültigen Google Drive Links gefunden"]
 
     logger.info(f"[{case_id}] Google Drive: {len(drive_ids)} IDs extracted from {len(links)} links")
 
-    # 1b. Get case's OneDrive folder ID for uploading
-    case = cases.load_case(case_id)
-    onedrive_folder_id = case.get("onedrive_folder_id", "") if case else ""
-
-    # Wenn noch kein OneDrive-Ordner, kurz warten (n8n erstellt ihn parallel)
-    # time.sleep ist OK weil diese Funktion immer via asyncio.to_thread() aufgerufen wird
-    if not onedrive_folder_id:
-        import time
-        logger.info(f"[{case_id}] Kein OneDrive-Ordner – warte 15s auf n8n Setup...")
-        time.sleep(15)
-        case = cases.load_case(case_id)
-        onedrive_folder_id = case.get("onedrive_folder_id", "") if case else ""
-        if onedrive_folder_id:
-            logger.info(f"[{case_id}] OneDrive-Ordner jetzt verfuegbar: {onedrive_folder_id}")
-        else:
-            logger.warning(f"[{case_id}] Immer noch kein OneDrive-Ordner – Upload wird uebersprungen")
-
-    # 2. Collect all files
     all_files = []
     for drive_item in drive_ids:
         try:
@@ -258,7 +213,6 @@ def process_google_drive_links(
                 if meta:
                     all_files.append(meta)
             else:
-                # Try as folder first, fall back to file
                 try:
                     folder_files = list_files_in_folder(drive_item["id"])
                     all_files.extend(folder_files)
@@ -271,69 +225,88 @@ def process_google_drive_links(
             logger.error(f"[{case_id}] {err}")
             errors.append(err)
 
-    files_found = len(all_files)
-    logger.info(f"[{case_id}] Google Drive: {files_found} total files found")
+    supported = [f for f in all_files if is_supported_file(f.get("name", ""))]
+    skipped = len(all_files) - len(supported)
+    if skipped:
+        logger.info(f"[{case_id}] Skipped {skipped} unsupported files")
 
-    # 3. Filter supported files
-    supported_files = [f for f in all_files if is_supported_file(f.get("name", ""))]
-    files_skipped = files_found - len(supported_files)
+    return supported, errors
 
-    if not supported_files:
+
+def sync_to_onedrive(
+    case_id: str,
+    links: list[str],
+    onedrive_folder_id: str,
+) -> dict:
+    """
+    Sync Google Drive files to OneDrive (upload only, no analysis).
+    Skips files that already exist in OneDrive (by filename match in DB).
+
+    Returns:
+        {
+            "success": True/False,
+            "files_found": int,
+            "files_uploaded": int,
+            "files_skipped": int,
+            "errors": [str]
+        }
+    """
+    from document_processor import _upload_to_onedrive
+    import db_postgres as db
+
+    gdrive_files, errors = _collect_gdrive_files(case_id, links)
+    if not gdrive_files:
         return {
-            "success": True,
-            "files_found": files_found,
-            "files_processed": 0,
-            "files_skipped": files_skipped,
-            "results": [],
-            "errors": errors or [f"{files_found} Dateien gefunden, aber keine unterstützten Formate"],
+            "success": False,
+            "files_found": 0,
+            "files_uploaded": 0,
+            "files_skipped": 0,
+            "errors": errors or ["Keine unterstützten Dateien gefunden"],
         }
 
-    # 4. Download files and process through central pipeline
-    from document_processor import FileInput
-    try:
-        from main import processor
-    except Exception as _imp_err:
-        logger.error(f"[{case_id}] Failed to import processor: {_imp_err}")
-        errors.append(f"Import error: {_imp_err}")
+    if not onedrive_folder_id:
         return {
-            "success": False, "files_found": files_found, "files_processed": 0,
-            "files_skipped": files_skipped, "results": results, "errors": errors,
+            "success": False,
+            "files_found": len(gdrive_files),
+            "files_uploaded": 0,
+            "files_skipped": 0,
+            "errors": ["Kein OneDrive-Ordner konfiguriert"],
         }
 
-    files = []
-    for file_info in supported_files:
+    # Check which files already exist in OneDrive (by filename in DB)
+    existing_docs = db.search_rows("fin_documents", "caseId", case_id)
+    existing_names = {d.get("file_name", "") for d in existing_docs}
+
+    files_uploaded = 0
+    files_skipped = 0
+
+    for file_info in gdrive_files:
         fname = file_info.get("name", "unknown")
         fid = file_info["id"]
+
+        if fname in existing_names:
+            logger.info(f"[{case_id}] Already in OneDrive, skipping: {fname}")
+            files_skipped += 1
+            continue
+
         try:
-            logger.info(f"[{case_id}] Downloading: {fname}")
+            logger.info(f"[{case_id}] Downloading from GDrive: {fname}")
             file_bytes = download_file(fid)
             mime = get_mime_type(fname)
-            files.append(FileInput(
-                filename=fname, file_bytes=file_bytes, mime_type=mime,
-                gdrive_file_id=fid, source="gdrive",
-            ))
+
+            _upload_to_onedrive(case_id, fname, file_bytes, mime, onedrive_folder_id)
+            files_uploaded += 1
         except Exception as e:
-            err_msg = f"Download failed for {fname}: {e}"
+            err_msg = f"Sync failed for {fname}: {e}"
             logger.error(f"[{case_id}] {err_msg}")
             errors.append(err_msg)
-            results.append({"filename": fname, "success": False, "error": str(e), "gdrive_file_id": fid})
 
-    if files:
-        batch_result = processor.process_batch(
-            case_id, files, upload_to_onedrive_folder=onedrive_folder_id,
-        )
-        for r in batch_result.get("results", []):
-            results.append(r)
-            if r.get("success"):
-                files_processed += 1
-            else:
-                errors.append(f"{r.get('filename')}: {r.get('error', 'unknown')}")
+    logger.info(f"[{case_id}] GDrive sync: {files_uploaded} uploaded, {files_skipped} skipped")
 
     return {
-        "success": files_processed > 0,
-        "files_found": files_found,
-        "files_processed": files_processed,
+        "success": files_uploaded > 0 or files_skipped > 0,
+        "files_found": len(gdrive_files),
+        "files_uploaded": files_uploaded,
         "files_skipped": files_skipped,
-        "results": results,
         "errors": errors,
     }

@@ -751,7 +751,7 @@ def _clear_facts_for_reanalyze(case: dict):
 
 
 async def _do_reanalyze(case_id: str):
-    """Führt Neuanalyse durch: OneDrive-Scan ODER Google Drive je nach Case. Läuft als Background-Task."""
+    """Neuanalyse: 1) GDrive → OneDrive sync, 2) OneDrive-Scan analysiert alles. Läuft als Background-Task."""
     import asyncio
 
     case = cases.load_case(case_id)
@@ -762,26 +762,28 @@ async def _do_reanalyze(case_id: str):
     _clear_facts_for_reanalyze(case)
 
     folder_id = case.get("onedrive_folder_id")
-    has_gdrive = False
-    # Prüfe ob Google Drive Links vorhanden
-    emails = db.search_rows("processed_emails", "case_id", case_id)
-    for email in emails:
-        parsed = email.get("parsed_result") or {}
-        if isinstance(parsed, str):
-            try:
-                parsed = json.loads(parsed)
-            except Exception:
-                parsed = {}
-        if parsed.get("google_drive_links"):
-            has_gdrive = True
-            break
-
     results = {}
 
-    # OneDrive Scan
+    # 1. Sync Google Drive → OneDrive (upload only, no analysis)
+    gdrive_links = _collect_gdrive_links(case_id)
+    if gdrive_links and folder_id:
+        try:
+            import gdrive
+            sync_result = await asyncio.to_thread(
+                gdrive.sync_to_onedrive,
+                case_id=case_id, links=gdrive_links, onedrive_folder_id=folder_id,
+            )
+            results["gdrive_uploaded"] = sync_result.get("files_uploaded", 0)
+            results["gdrive_skipped"] = sync_result.get("files_skipped", 0)
+            logger.info(f"Reanalyze GDrive sync: {sync_result}")
+        except Exception as e:
+            logger.error(f"Reanalyze GDrive sync failed: {e}")
+            results["gdrive_error"] = str(e)
+
+    # 2. OneDrive Scan → analysiert alle Dateien (GDrive + bestehende)
     if folder_id and N8N_SCAN_WEBHOOK:
         try:
-            async with httpx.AsyncClient(timeout=180) as client:
+            async with httpx.AsyncClient(timeout=300) as client:
                 resp = await client.post(N8N_SCAN_WEBHOOK, headers=_n8n_headers(), json={
                     "case_id": case_id,
                     "onedrive_folder_id": folder_id,
@@ -794,30 +796,7 @@ async def _do_reanalyze(case_id: str):
             logger.error(f"Reanalyze OneDrive scan failed: {e}")
             results["onedrive_error"] = str(e)
 
-    # Google Drive Processing
-    if has_gdrive:
-        try:
-            import gdrive
-            # Links aus E-Mails sammeln
-            gdrive_links = []
-            for email in emails:
-                parsed = email.get("parsed_result") or {}
-                if isinstance(parsed, str):
-                    try:
-                        parsed = json.loads(parsed)
-                    except Exception:
-                        parsed = {}
-                gdrive_links.extend(parsed.get("google_drive_links", []))
-            if gdrive_links:
-                gdrive_result = await asyncio.to_thread(
-                    gdrive.process_google_drive_links, case_id=case_id, links=gdrive_links
-                )
-                results["gdrive_processed"] = gdrive_result.get("files_processed", 0)
-        except Exception as e:
-            logger.error(f"Reanalyze GDrive failed: {e}")
-            results["gdrive_error"] = str(e)
-
-    # Readiness Check
+    # 3. Readiness Check
     try:
         readiness_result = rdns.check_readiness(case_id)
         results["status"] = readiness_result.get("status")
@@ -829,15 +808,43 @@ async def _do_reanalyze(case_id: str):
     return results
 
 
+def _collect_gdrive_links(case_id: str) -> list[str]:
+    """Sammelt alle Google Drive Links aus den E-Mails eines Cases."""
+    emails = db.search_rows("processed_emails", "case_id", case_id)
+    links = []
+    for email in emails:
+        parsed = email.get("parsed_result") or {}
+        if isinstance(parsed, str):
+            try:
+                parsed = json.loads(parsed)
+            except Exception:
+                parsed = {}
+        links.extend(parsed.get("google_drive_links", []))
+    return links
+
+
 async def _run_scan_background(case_id: str, folder_id: str, force: bool):
-    """n8n OneDrive-Scan + Google Drive Check im Hintergrund."""
+    """GDrive → OneDrive sync + n8n OneDrive-Scan im Hintergrund."""
     import asyncio
     scanned = 0
 
-    # 1. OneDrive Scan
+    # 1. Sync new GDrive files to OneDrive first
+    gdrive_links = _collect_gdrive_links(case_id)
+    if gdrive_links and folder_id:
+        try:
+            import gdrive
+            sync_result = await asyncio.to_thread(
+                gdrive.sync_to_onedrive,
+                case_id=case_id, links=gdrive_links, onedrive_folder_id=folder_id,
+            )
+            logger.info(f"Scan background GDrive sync for {case_id}: {sync_result.get('files_uploaded', 0)} uploaded")
+        except Exception as e:
+            logger.error(f"Scan background GDrive sync failed for {case_id}: {e}")
+
+    # 2. OneDrive Scan → analyses all files (including freshly synced GDrive files)
     try:
         async with httpx.AsyncClient(timeout=300) as client:
-            resp = await client.post(N8N_SCAN_WEBHOOK, json={
+            resp = await client.post(N8N_SCAN_WEBHOOK, headers=_n8n_headers(), json={
                 "case_id": case_id,
                 "onedrive_folder_id": folder_id,
                 "force_reanalyze": force,
@@ -849,29 +856,6 @@ async def _run_scan_background(case_id: str, folder_id: str, force: bool):
     except Exception as e:
         logger.error(f"Scan background OneDrive failed for {case_id}: {e}")
 
-    # 2. Google Drive – check if case has GDrive links and process any new files
-    try:
-        emails = db.search_rows("processed_emails", "case_id", case_id)
-        gdrive_links = []
-        for email in emails:
-            parsed = email.get("parsed_result") or {}
-            if isinstance(parsed, str):
-                try:
-                    parsed = json.loads(parsed)
-                except Exception:
-                    parsed = {}
-            gdrive_links.extend(parsed.get("google_drive_links", []))
-        if gdrive_links:
-            import gdrive
-            gdrive_result = await asyncio.to_thread(
-                gdrive.process_google_drive_links, case_id=case_id, links=gdrive_links
-            )
-            gdrive_processed = gdrive_result.get("files_processed", 0)
-            scanned += gdrive_processed
-            logger.info(f"Scan background GDrive done for {case_id}: {gdrive_processed} processed")
-    except Exception as e:
-        logger.error(f"Scan background GDrive failed for {case_id}: {e}")
-
     # 3. Readiness + Notifications
     try:
         readiness_result = rdns.check_readiness(case_id)
@@ -882,17 +866,44 @@ async def _run_scan_background(case_id: str, folder_id: str, force: bool):
 
 
 async def _run_gdrive_background(case_id: str, links: list):
-    """GDrive-Analyse im Hintergrund – blockiert kein Frontend."""
+    """GDrive → OneDrive sync im Hintergrund, dann OneDrive-Scan."""
+    import asyncio
     try:
-        import gdrive
-        import asyncio
-        result = await asyncio.to_thread(
-            gdrive.process_google_drive_links, case_id=case_id, links=links
-        )
-        logger.info(f"GDrive background done for {case_id}: {result.get('files_processed', 0)} processed")
-        if result.get("files_processed", 0) > 0:
-            readiness_result = await asyncio.to_thread(rdns.check_readiness, case_id)
-            notify.dispatch_notifications(case_id, readiness_result, force=True)
+        import case_logic as _cases
+        _case = _cases.load_case(case_id)
+        folder_id = _case.get("onedrive_folder_id", "") if _case else ""
+
+        if not folder_id:
+            # Warte auf n8n Setup Case
+            import time
+            await asyncio.to_thread(time.sleep, 15)
+            _case = _cases.load_case(case_id)
+            folder_id = _case.get("onedrive_folder_id", "") if _case else ""
+
+        if folder_id:
+            import gdrive
+            sync_result = await asyncio.to_thread(
+                gdrive.sync_to_onedrive,
+                case_id=case_id, links=links, onedrive_folder_id=folder_id,
+            )
+            uploaded = sync_result.get("files_uploaded", 0)
+            logger.info(f"GDrive background sync for {case_id}: {uploaded} uploaded")
+
+            # Trigger OneDrive scan to analyze the uploaded files
+            if uploaded > 0 and N8N_SCAN_WEBHOOK:
+                async with httpx.AsyncClient(timeout=300) as client:
+                    resp = await client.post(N8N_SCAN_WEBHOOK, headers=_n8n_headers(), json={
+                        "case_id": case_id,
+                        "onedrive_folder_id": folder_id,
+                        "force_reanalyze": False,
+                    })
+                    resp.raise_for_status()
+                    logger.info(f"GDrive background scan triggered for {case_id}")
+
+                readiness_result = await asyncio.to_thread(rdns.check_readiness, case_id)
+                notify.dispatch_notifications(case_id, readiness_result, force=True)
+        else:
+            logger.warning(f"[{case_id}] No OneDrive folder — GDrive sync skipped")
     except Exception as e:
         logger.error(f"GDrive background failed for {case_id}: {e}")
 

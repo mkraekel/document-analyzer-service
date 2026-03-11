@@ -1995,25 +1995,54 @@ async def process_email(request: ProcessEmailRequest):
 
 
 async def _process_gdrive_async(case_id: str, links: list):
-    """Background task: process Google Drive links after email processing.
+    """Background task: sync Google Drive files to OneDrive, then trigger scan.
     Runs blocking work in thread pool to avoid blocking the event loop."""
     import asyncio
     try:
         import gdrive
-        # Run blocking Google Drive + GPT analysis in thread pool
-        result = await asyncio.to_thread(
-            gdrive.process_google_drive_links, case_id=case_id, links=links
-        )
-        processed = result.get("files_processed", 0)
-        logger.info(f"[{case_id}] Google Drive async: {processed} files processed")
+        import case_logic as _cases
 
-        # Re-run readiness check after Google Drive files are analyzed
-        if processed > 0:
-            try:
+        _case = _cases.load_case(case_id)
+        folder_id = _case.get("onedrive_folder_id", "") if _case else ""
+
+        # Wait for n8n to create OneDrive folder if needed
+        if not folder_id:
+            import time
+            logger.info(f"[{case_id}] Waiting for OneDrive folder (n8n setup)...")
+            await asyncio.to_thread(time.sleep, 15)
+            _case = _cases.load_case(case_id)
+            folder_id = _case.get("onedrive_folder_id", "") if _case else ""
+
+        if not folder_id:
+            logger.warning(f"[{case_id}] No OneDrive folder — GDrive sync skipped")
+            return
+
+        # 1. Sync GDrive → OneDrive
+        sync_result = await asyncio.to_thread(
+            gdrive.sync_to_onedrive,
+            case_id=case_id, links=links, onedrive_folder_id=folder_id,
+        )
+        uploaded = sync_result.get("files_uploaded", 0)
+        logger.info(f"[{case_id}] GDrive sync: {uploaded} uploaded, {sync_result.get('files_skipped', 0)} skipped")
+
+        # 2. Trigger n8n OneDrive scan to analyze uploaded files
+        if uploaded > 0:
+            n8n_scan = os.getenv("N8N_SCAN_WEBHOOK", "")
+            n8n_key = os.getenv("N8N_WEBHOOK_API_KEY", "")
+            if n8n_scan:
+                import httpx
+                headers = {"X-API-Key": n8n_key} if n8n_key else {}
+                async with httpx.AsyncClient(timeout=300) as client:
+                    resp = await client.post(n8n_scan, headers=headers, json={
+                        "case_id": case_id,
+                        "onedrive_folder_id": folder_id,
+                        "force_reanalyze": False,
+                    })
+                    resp.raise_for_status()
+                    logger.info(f"[{case_id}] OneDrive scan triggered after GDrive sync")
+
                 readiness_result = await asyncio.to_thread(rdns.check_readiness, case_id)
                 notify.dispatch_notifications(case_id, readiness_result)
-            except Exception as e:
-                logger.error(f"[{case_id}] Readiness after gdrive failed: {e}")
     except Exception as e:
         logger.error(f"[{case_id}] Google Drive async processing failed: {e}")
 
@@ -2845,18 +2874,15 @@ class ProcessGoogleDriveResponse(BaseModel):
     success: bool
     case_id: str
     files_found: int = 0
-    files_processed: int = 0
+    files_uploaded: int = 0
     files_skipped: int = 0
-    results: list = []
     errors: list = []
-    readiness: Optional[dict] = None
 
 @app.post("/process-google-drive", response_model=ProcessGoogleDriveResponse)
 async def process_google_drive(request: ProcessGoogleDriveRequest):
     """
-    Downloads files from Google Drive links and analyzes them.
-    Called after email processing when google_drive_links are detected,
-    or manually from the dashboard.
+    Syncs files from Google Drive to OneDrive (no analysis).
+    Analysis happens via n8n OneDrive scan.
     """
     logger.info(f"process-google-drive: {request.case_id} / {len(request.google_drive_links)} links")
 
@@ -2869,25 +2895,24 @@ async def process_google_drive(request: ProcessGoogleDriveRequest):
     try:
         import gdrive
         import asyncio
-        # Run blocking Google Drive + GPT analysis in thread pool
+
+        case = cases.load_case(request.case_id)
+        folder_id = case.get("onedrive_folder_id", "") if case else ""
+        if not folder_id:
+            return ProcessGoogleDriveResponse(
+                success=False, case_id=request.case_id,
+                errors=["Kein OneDrive-Ordner konfiguriert"],
+            )
+
         result = await asyncio.to_thread(
-            gdrive.process_google_drive_links,
+            gdrive.sync_to_onedrive,
             case_id=request.case_id,
             links=request.google_drive_links,
+            onedrive_folder_id=folder_id,
         )
-
-        # Run readiness check after processing
-        readiness_result = None
-        if result.get("files_processed", 0) > 0:
-            try:
-                readiness_result = await asyncio.to_thread(rdns.check_readiness, request.case_id)
-                notify.dispatch_notifications(request.case_id, readiness_result)
-            except Exception as e:
-                logger.error(f"Readiness check after gdrive failed: {e}")
 
         return ProcessGoogleDriveResponse(
             case_id=request.case_id,
-            readiness=readiness_result,
             **result,
         )
 
