@@ -483,6 +483,7 @@ def check_readiness(case_id: str) -> dict:
 
     # ──────────────────────────────────────────
     # 3. Employment-Typ bestimmen (für Selbstständige-Checks + Doku)
+    #    Bei Paaren: beide Personen getrennt prüfen
     # ──────────────────────────────────────────
     employment = str(
         _find_value(view, "employment_type")
@@ -490,6 +491,16 @@ def check_readiness(case_id: str) -> dict:
         or "Angestellter"
     )
     is_self_employed = "selbst" in employment.lower() or "freiberuf" in employment.lower()
+
+    # Person 2 Employment-Typ (für Paare)
+    employment_2 = str(
+        _get_nested(view, "applicant_data_2.employment_type")
+        or _get_nested(view, "employment_data_2.employment_type")
+        or ""
+    )
+    is_self_employed_2 = bool(employment_2) and (
+        "selbst" in employment_2.lower() or "freiberuf" in employment_2.lower()
+    )
 
     # Selbstständige: Zusätzliche Pflichtfelder
     if is_self_employed:
@@ -612,7 +623,16 @@ def check_readiness(case_id: str) -> dict:
         check_doc(doc_type, req)
 
     # Angestellte oder Selbstständige
-    if is_self_employed:
+    # Bei Paaren mit gemischtem Employment (z.B. Angestellter + Selbständige)
+    # beide Dokumentsets anfordern
+    if is_couple and is_self_employed != is_self_employed_2 and employment_2:
+        # Mischfall: beide Dokument-Sets, aber per_person counts nicht verdoppeln
+        logger.info(f"[{case_id}] Mixed employment couple: P1={employment}, P2={employment_2}")
+        for doc_type, req in DOCS_REQUIRED_EMPLOYED.items():
+            check_doc(doc_type, {**req, "per_person": False})
+        for doc_type, req in DOCS_REQUIRED_SELF_EMPLOYED.items():
+            check_doc(doc_type, {**req, "per_person": False})
+    elif is_self_employed:
         for doc_type, req in DOCS_REQUIRED_SELF_EMPLOYED.items():
             check_doc(doc_type, req)
     else:

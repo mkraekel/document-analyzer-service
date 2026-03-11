@@ -40,7 +40,9 @@ export function flattenObject(
   const result: Record<string, string> = {}
   for (const [key, val] of Object.entries(obj)) {
     const fullKey = prefix ? `${prefix}.${key}` : key
-    if (val && typeof val === 'object' && !Array.isArray(val)) {
+    if (Array.isArray(val)) {
+      result[fullKey] = JSON.stringify(val)
+    } else if (val && typeof val === 'object') {
       Object.assign(result, flattenObject(val as Record<string, unknown>, fullKey))
     } else if (val !== null && val !== undefined && val !== '') {
       result[fullKey] = String(val)

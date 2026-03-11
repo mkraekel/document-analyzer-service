@@ -2280,6 +2280,8 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
     docs_processed = []
     doc_rows_to_insert = []  # Batch: alle Dokumente sammeln, dann einmal speichern
     all_new_facts = {}       # Gesammelte Facts aus allen Dokumenten
+    all_person_names = []    # Gesammelte Personennamen aus Dokumenten
+    analysis_results = []    # Pass 1: GPT-Ergebnisse sammeln
     if request.attachments:
         now_ts = datetime.utcnow().isoformat()
         for filename, b64_data in request.attachments.items():
@@ -2306,21 +2308,16 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
                     "processed_at": now_ts,
                 })
 
-                # Facts sammeln (einmal am Ende mergen)
+                # Ergebnisse sammeln (Facts-Mapping kommt in Pass 2)
                 _person = (result.get("meta") or {}).get("person_name")
-                _is_couple = _detect_is_couple(applicant_name, all_new_facts)
-                new_facts = _map_extracted_to_facts(
-                    result.get("doc_type", ""), extracted,
-                    person_name=_person,
-                    case_applicant_name=applicant_name,
-                    is_couple=_is_couple,
-                )
-                if new_facts:
-                    all_new_facts = cases.merge_facts(all_new_facts, new_facts)
-
-                # Applicant name ggf. korrigieren (bei erster Ausweiskopie)
-                if result.get("doc_type") in ("Ausweiskopie", "Selbstauskunft") and _person:
-                    _maybe_update_applicant_name(case_id, _person)
+                if _person and _person not in all_person_names:
+                    all_person_names.append(_person)
+                analysis_results.append({
+                    "doc_type": result.get("doc_type", ""),
+                    "extracted": extracted,
+                    "person_name": _person,
+                    "filename": filename,
+                })
 
                 docs_processed.append({"filename": filename, "doc_type": result.get("doc_type"), "success": True})
                 logger.info(f"Attachment processed: {filename} → {result.get('doc_type')}")
@@ -2335,6 +2332,23 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
                 db.batch_create_rows("fin_documents", doc_rows_to_insert)
             except Exception as e:
                 logger.error(f"Batch insert fin_documents failed: {e}")
+
+        # Pass 2: Jetzt wo ALLE Personennamen bekannt sind → Facts korrekt mappen
+        _is_couple = _detect_is_couple(applicant_name, all_new_facts, all_person_names)
+        if _is_couple:
+            logger.info(f"[{case_id}] Couple detected from {len(all_person_names)} persons: {all_person_names}")
+        for ar in analysis_results:
+            new_facts = _map_extracted_to_facts(
+                ar["doc_type"], ar["extracted"],
+                person_name=ar["person_name"],
+                case_applicant_name=applicant_name,
+                is_couple=_is_couple,
+            )
+            if new_facts:
+                all_new_facts = cases.merge_facts(all_new_facts, new_facts)
+            # Applicant name ggf. korrigieren (bei erster Ausweiskopie)
+            if ar["doc_type"] in ("Ausweiskopie", "Selbstauskunft") and ar["person_name"]:
+                _maybe_update_applicant_name(case_id, ar["person_name"])
 
         # Gesammelte Facts einmal mergen (1 DB call statt N)
         if all_new_facts:
@@ -2550,7 +2564,11 @@ async def _process_document_background(
             _case = cases.load_case(case_id)
             _case_name = _case.get("applicant_name") if _case else None
             _existing_facts = _case.get("_facts_extracted", {}) if _case else {}
-            _is_couple = _detect_is_couple(_case_name, _existing_facts)
+            # Collect known person names from existing docs
+            _existing_person_names = _collect_person_names_from_docs(case_id)
+            if _person and _person not in _existing_person_names:
+                _existing_person_names.append(_person)
+            _is_couple = _detect_is_couple(_case_name, _existing_facts, _existing_person_names)
             new_facts = _map_extracted_to_facts(
                 doc_type, extracted,
                 person_name=_person,
@@ -2579,7 +2597,7 @@ async def _process_document_background(
         logger.info(f"[{case_id}] Done processing {filename} → {result.get('doc_type', '?')}")
 
 
-def _detect_is_couple(applicant_name: str, facts: dict) -> bool:
+def _detect_is_couple(applicant_name: str, facts: dict, all_person_names: list[str] | None = None) -> bool:
     """Erkennt ob es sich um ein Paar handelt (zwei Antragsteller)."""
     # 1. "und" / "&" im Case-Namen → Paar
     if applicant_name:
@@ -2590,7 +2608,64 @@ def _detect_is_couple(applicant_name: str, facts: dict) -> bool:
     ad2 = facts.get("applicant_data_2", {})
     if isinstance(ad2, dict) and (ad2.get("first_name") or ad2.get("vorname")):
         return True
+    # 3. Verschiedene Vornamen in bisherigen Dokumenten → Paar
+    if all_person_names and applicant_name:
+        from difflib import SequenceMatcher
+        case_clean = _clean_person_name(applicant_name).lower()
+        case_parts = case_clean.split()
+        if len(case_parts) >= 2:
+            case_first = case_parts[0]
+            case_last_parts = case_parts[1:]  # Kann mehrteilig sein (von Müller)
+            for pn in all_person_names:
+                pn_clean = _clean_person_name(pn).lower()
+                pn_parts = pn_clean.split()
+                if len(pn_parts) < 2:
+                    continue
+                pn_first = pn_parts[0]
+                pn_last_parts = pn_parts[1:]
+                # Vorname muss verschieden sein
+                if pn_first == case_first:
+                    continue
+                # Nachname muss ähnlich sein (exakt ODER fuzzy >= 0.8)
+                case_last = " ".join(case_last_parts)
+                pn_last = " ".join(pn_last_parts)
+                if case_last == pn_last or SequenceMatcher(None, case_last, pn_last).ratio() >= 0.8:
+                    logger.info(
+                        f"Couple detected: '{applicant_name}' vs person '{pn}' "
+                        f"(last name match: '{case_last}' ~ '{pn_last}', different first names)"
+                    )
+                    return True
     return False
+
+
+def _collect_person_names_from_docs(case_id: str) -> list[str]:
+    """Sammelt alle Personennamen aus den Dokumenten eines Cases."""
+    names = []
+    docs = db.get_rows("fin_documents", "caseId", case_id) or []
+    for doc in docs:
+        ed = doc.get("extracted_data") or {}
+        if isinstance(ed, str):
+            try:
+                ed = json.loads(ed)
+            except Exception:
+                continue
+        # Try various name fields
+        vorname = ed.get("Vorname") or ed.get("vorname") or ""
+        nachname = ed.get("Nachname") or ed.get("nachname") or ""
+        if vorname and nachname:
+            full = f"{vorname} {nachname}"
+            if full not in names:
+                names.append(full)
+        # Also from applicant_data sub-dict
+        ad = ed.get("applicant_data") or {}
+        if isinstance(ad, dict):
+            fn = ad.get("first_name") or ad.get("vorname") or ""
+            ln = ad.get("last_name") or ad.get("nachname") or ""
+            if fn and ln:
+                full = f"{fn} {ln}"
+                if full not in names:
+                    names.append(full)
+    return names
 
 
 def _clean_person_name(name: str) -> str:
@@ -2606,28 +2681,58 @@ def _clean_person_name(name: str) -> str:
 def _is_primary_applicant(person_name: str, case_applicant_name: str) -> bool:
     """
     Check if person_name matches the case's primary applicant.
-    Returns True if they share at least one name part (first/last name).
+    Compares first names (fuzzy). If only last name matches but first name
+    is clearly different → NOT primary (likely the partner).
     Returns True by default if we can't determine.
     """
+    from difflib import SequenceMatcher
+
     if not person_name or not case_applicant_name:
         return True  # Can't determine → default to primary
 
     pn = _clean_person_name(person_name).lower()
     cn = _clean_person_name(case_applicant_name).lower()
 
-    # Handle "und"/"&" in names
-    pn_parts = set(pn.replace(" und ", " ").replace(" & ", " ").split())
-    cn_parts = set(cn.replace(" und ", " ").replace(" & ", " ").split())
+    # Handle "und"/"&" in names — case_applicant_name may be "Max und Lisa Müller"
+    cn_names = cn.replace(" und ", " ").replace(" & ", " ").split()
+    pn_parts = pn.split()
 
     # Remove common filler words
     fillers = {"und", "&", "von", "van", "de", "der", "die", "das"}
-    pn_parts -= fillers
-    cn_parts -= fillers
+    cn_names = [p for p in cn_names if p not in fillers]
+    pn_parts = [p for p in pn_parts if p not in fillers]
 
-    if not pn_parts or not cn_parts:
+    if not pn_parts or not cn_names:
         return True
 
-    return bool(pn_parts & cn_parts)
+    # Strategy: If we can identify first + last name, compare first names.
+    # A last-name-only match with a different first name means NOT primary.
+    if len(pn_parts) >= 2 and len(cn_names) >= 2:
+        pn_first = pn_parts[0]
+        pn_last = " ".join(pn_parts[1:])
+        # Case name may contain multiple first names (e.g. "Max Lisa Müller")
+        # Try each name in cn_names as potential first name match
+        cn_last = cn_names[-1]  # Last part is likely the surname
+        cn_firsts = cn_names[:-1]  # Everything else is first name(s)
+
+        last_match = (pn_last == cn_last
+                      or SequenceMatcher(None, pn_last, cn_last).ratio() >= 0.8)
+        first_match = any(
+            pn_first == cf or SequenceMatcher(None, pn_first, cf).ratio() >= 0.8
+            for cf in cn_firsts
+        )
+        if last_match and not first_match:
+            # Same family name but different first name → partner, not primary
+            return False
+        if first_match:
+            return True
+
+    # Fallback: any part matches
+    for pp in pn_parts:
+        for cp in cn_names:
+            if pp == cp or (len(pp) > 2 and len(cp) > 2 and SequenceMatcher(None, pp, cp).ratio() >= 0.8):
+                return True
+    return False
 
 
 def _maybe_update_applicant_name(case_id: str, person_name: str):

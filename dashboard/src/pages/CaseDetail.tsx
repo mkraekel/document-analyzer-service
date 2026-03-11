@@ -331,7 +331,7 @@ export function CaseDetail() {
       </button>
 
       <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
-        <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex flex-col gap-4">
           <div>
             <h1 className="text-2xl font-bold text-gray-900 mb-1">
               {c.applicant_name || 'Unbekannt'}
@@ -377,84 +377,125 @@ export function CaseDetail() {
             </div>
           </div>
 
-          {/* Quick Actions */}
-          <div className="flex flex-wrap gap-2">
-            <button
-              onClick={() => doAction('RECHECK')}
-              disabled={busy}
-              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors"
-            >
-              <RefreshCw size={14} />
-              Erneut prüfen
-            </button>
-            <button
-              onClick={doReanalyze}
-              disabled={busy}
-              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-orange-300 text-orange-700 rounded-lg hover:bg-orange-50 disabled:opacity-50 transition-colors"
-            >
-              <RefreshCw size={14} />
-              Neu analysieren
-            </button>
-            <button
-              onClick={() => doAction('FREIGABE')}
-              disabled={busy}
-              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
-            >
-              <Check size={14} />
-              Freigabe
-            </button>
-            <button
-              onClick={() => { if (confirm('Case wirklich ablehnen?')) doAction('DECLINE') }}
-              disabled={busy}
-              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-red-300 text-red-700 rounded-lg hover:bg-red-50 disabled:opacity-50 transition-colors"
-            >
-              <XCircle size={14} />
-              Ablehnen
-            </button>
-            <button
-              onClick={() => { if (confirm('Case archivieren?')) doAction('ARCHIVE') }}
-              disabled={busy}
-              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors"
-            >
-              <Archive size={14} />
-              Archivieren
-            </button>
-            <button
-              onClick={async () => {
-                setBusy(true)
-                try {
-                  await api.post(`/api/dashboard/case/${caseId}/test-mail`)
-                  addToast('Test-Mail generiert – siehe Ausgehende E-Mails', 'info')
-                } catch (e) {
-                  addToast(e instanceof Error ? e.message : 'Fehler', 'error')
-                } finally {
-                  setBusy(false)
-                }
-              }}
-              disabled={busy}
-              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-blue-300 text-blue-700 rounded-lg hover:bg-blue-50 disabled:opacity-50 transition-colors"
-            >
-              <Send size={14} />
-              Test-Mail
-            </button>
+          {/* Quick Actions – grouped */}
+          <div className="flex flex-wrap items-end gap-4">
+            {/* Analyse */}
+            <div>
+              <span className="block text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">Analyse</span>
+              <div className="flex gap-1.5">
+                <button
+                  onClick={() => doAction('RECHECK')}
+                  disabled={busy}
+                  title="Readiness-Check erneut ausführen"
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                >
+                  <RefreshCw size={14} />
+                  Prüfen
+                </button>
+                <button
+                  onClick={doReanalyze}
+                  disabled={busy}
+                  title="Alle Dokumente komplett neu analysieren (GPT)"
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-orange-300 text-orange-700 rounded-lg hover:bg-orange-50 disabled:opacity-50 transition-colors"
+                >
+                  <RefreshCw size={14} />
+                  Neu analysieren
+                </button>
+              </div>
+            </div>
+
+            {/* Divider */}
+            <div className="hidden sm:block w-px h-9 bg-gray-200" />
+
+            {/* Status */}
+            <div>
+              <span className="block text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">Status</span>
+              <div className="flex gap-1.5">
+                <button
+                  onClick={() => doAction('FREIGABE')}
+                  disabled={busy}
+                  title="Case freigeben und zur Weiterverarbeitung markieren"
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
+                >
+                  <Check size={14} />
+                  Freigabe
+                </button>
+                <button
+                  onClick={() => { if (confirm('Case wirklich ablehnen?')) doAction('DECLINE') }}
+                  disabled={busy}
+                  title="Case ablehnen"
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-red-300 text-red-700 rounded-lg hover:bg-red-50 disabled:opacity-50 transition-colors"
+                >
+                  <XCircle size={14} />
+                  Ablehnen
+                </button>
+                <button
+                  onClick={() => { if (confirm('Case archivieren?')) doAction('ARCHIVE') }}
+                  disabled={busy}
+                  title="Case archivieren (verschwindet aus der aktiven Liste)"
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                >
+                  <Archive size={14} />
+                </button>
+              </div>
+            </div>
+
+            {/* Divider */}
+            <div className="hidden sm:block w-px h-9 bg-gray-200" />
+
+            {/* Tools */}
+            <div>
+              <span className="block text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">Tools</span>
+              <div className="flex gap-1.5">
+                <button
+                  onClick={async () => {
+                    setBusy(true)
+                    try {
+                      await api.post(`/api/dashboard/case/${caseId}/test-mail`)
+                      addToast('Test-Mail generiert – siehe Ausgehende E-Mails', 'info')
+                    } catch (e) {
+                      addToast(e instanceof Error ? e.message : 'Fehler', 'error')
+                    } finally {
+                      setBusy(false)
+                    }
+                  }}
+                  disabled={busy}
+                  title="Test-Mail generieren (erscheint unter Ausgehende E-Mails)"
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-blue-300 text-blue-700 rounded-lg hover:bg-blue-50 disabled:opacity-50 transition-colors"
+                >
+                  <Mail size={14} />
+                  Test-Mail
+                </button>
+              </div>
+            </div>
+
+            {/* Import – only when ready */}
             {c.status === 'READY_FOR_IMPORT' && (
               <>
-                <button
-                  onClick={() => doImport(true)}
-                  disabled={busy}
-                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-indigo-300 text-indigo-700 rounded-lg hover:bg-indigo-50 disabled:opacity-50 transition-colors"
-                >
-                  <Eye size={14} />
-                  Dry-Run Import
-                </button>
-                <button
-                  onClick={() => { if (confirm('Case jetzt an Europace senden?')) doImport(false) }}
-                  disabled={busy}
-                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors"
-                >
-                  <Send size={14} />
-                  Import starten
-                </button>
+                <div className="hidden sm:block w-px h-9 bg-gray-200" />
+                <div>
+                  <span className="block text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">Import</span>
+                  <div className="flex gap-1.5">
+                    <button
+                      onClick={() => doImport(true)}
+                      disabled={busy}
+                      title="Import simulieren ohne Daten zu senden"
+                      className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-indigo-300 text-indigo-700 rounded-lg hover:bg-indigo-50 disabled:opacity-50 transition-colors"
+                    >
+                      <Eye size={14} />
+                      Dry-Run
+                    </button>
+                    <button
+                      onClick={() => { if (confirm('Case jetzt an Europace senden?')) doImport(false) }}
+                      disabled={busy}
+                      title="Case an Europace übertragen"
+                      className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+                    >
+                      <Send size={14} />
+                      Import
+                    </button>
+                  </div>
+                </div>
               </>
             )}
           </div>
@@ -1146,10 +1187,21 @@ function EditableDataGrid({
             </div>
           ) : (
             <div className="flex items-center gap-2 flex-1 justify-end">
-              <span className="text-sm text-gray-900">{val || '-'}</span>
+              {val.startsWith('[') ? (
+                <pre className="text-xs text-gray-900 bg-white rounded px-2 py-1 overflow-x-auto max-w-md">{(() => {
+                  try {
+                    const arr = JSON.parse(val)
+                    return arr.map((item: Record<string, unknown>) =>
+                      Object.entries(item).map(([k, v]) => `${k}: ${v}`).join(' | ')
+                    ).join('\n')
+                  } catch { return val }
+                })()}</pre>
+              ) : (
+                <span className="text-sm text-gray-900">{val || '-'}</span>
+              )}
               <button
                 onClick={() => { setEditing(key); setEditValue(val || '') }}
-                className="text-gray-300 hover:text-gray-500"
+                className="text-gray-300 hover:text-gray-500 shrink-0"
               >
                 <Pencil size={12} />
               </button>
