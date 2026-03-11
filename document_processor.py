@@ -108,8 +108,8 @@ def _clean_person_name(name: str) -> str:
 def _is_primary_applicant(person_name: str, case_applicant_name: str) -> bool:
     """
     Check if person_name matches the case's primary applicant.
-    Compares first names (fuzzy). If only last name matches but first name
-    is clearly different → NOT primary (likely the partner).
+    When case_applicant_name contains "&" or "und" (couple name),
+    only the FIRST person is considered primary.
     Returns True by default if we can't determine.
     """
     from difflib import SequenceMatcher
@@ -117,48 +117,60 @@ def _is_primary_applicant(person_name: str, case_applicant_name: str) -> bool:
     if not person_name or not case_applicant_name:
         return True  # Can't determine → default to primary
 
-    pn = _clean_person_name(person_name).lower()
-    cn = _clean_person_name(case_applicant_name).lower()
+    pn = _clean_person_name(person_name).lower().strip()
 
-    # Handle "und"/"&" in names — case_applicant_name may be "Max und Lisa Müller"
-    cn_names = cn.replace(" und ", " ").replace(" & ", " ").split()
-    pn_parts = pn.split()
+    # If couple name (contains "&" or "und"), extract only the FIRST person
+    cn_raw = _clean_person_name(case_applicant_name).lower().strip()
+    for sep in (" & ", " und "):
+        if sep in cn_raw:
+            cn_raw = cn_raw.split(sep)[0].strip()
+            break
 
-    # Remove common filler words
-    fillers = {"und", "&", "von", "van", "de", "der", "die", "das"}
-    cn_names = [p for p in cn_names if p not in fillers]
-    pn_parts = [p for p in pn_parts if p not in fillers]
-
-    if not pn_parts or not cn_names:
+    if not pn or not cn_raw:
         return True
 
-    # Strategy: If we can identify first + last name, compare first names.
-    # A last-name-only match with a different first name means NOT primary.
-    if len(pn_parts) >= 2 and len(cn_names) >= 2:
-        pn_first = pn_parts[0]
+    # Direct similarity check: person_name vs primary applicant name
+    if SequenceMatcher(None, pn, cn_raw).ratio() >= 0.75:
+        return True
+
+    pn_parts = pn.split()
+    cn_parts = cn_raw.split()
+
+    if not pn_parts or not cn_parts:
+        return True
+
+    # Compare first names
+    pn_first = pn_parts[0]
+    cn_first = cn_parts[0]
+
+    first_match = (pn_first == cn_first
+                   or (len(pn_first) >= 3 and len(cn_first) >= 3
+                       and SequenceMatcher(None, pn_first, cn_first).ratio() >= 0.8))
+
+    # If first names clearly match → primary
+    if first_match:
+        return True
+
+    # If first names clearly DON'T match → not primary
+    if len(pn_parts) >= 2 and len(cn_parts) >= 2:
+        # Check if last names overlap (same family)
         pn_last = " ".join(pn_parts[1:])
-        # Case name may contain multiple first names (e.g. "Max Lisa Müller")
-        # Try each name in cn_names as potential first name match
-        cn_last = cn_names[-1]  # Last part is likely the surname
-        cn_firsts = cn_names[:-1]  # Everything else is first name(s)
-
+        cn_last = " ".join(cn_parts[1:])
         last_match = (pn_last == cn_last
-                      or SequenceMatcher(None, pn_last, cn_last).ratio() >= 0.8)
-        first_match = any(
-            pn_first == cf or SequenceMatcher(None, pn_first, cf).ratio() >= 0.8
-            for cf in cn_firsts
-        )
+                      or SequenceMatcher(None, pn_last, cn_last).ratio() >= 0.75)
         if last_match and not first_match:
-            # Same family name but different first name → partner, not primary
-            return False
-        if first_match:
-            return True
+            return False  # Same family, different first name → partner
 
-    # Fallback: any part matches
+    # Fallback: check any significant part overlap
     for pp in pn_parts:
-        for cp in cn_names:
-            if pp == cp or (len(pp) > 2 and len(cp) > 2 and SequenceMatcher(None, pp, cp).ratio() >= 0.8):
+        if len(pp) < 3:
+            continue
+        for cp in cn_parts:
+            if len(cp) < 3:
+                continue
+            if pp == cp or SequenceMatcher(None, pp, cp).ratio() >= 0.8:
                 return True
+
     return False
 
 
