@@ -13,22 +13,31 @@ import db_postgres as db
 
 logger = logging.getLogger(__name__)
 
-# Erlaubte Absender-E-Mails (Allowlist aus Gatekeeper Node)
-ALLOWLIST = [
-    "l.safi@muniqre.com",
-    "a.sergejcuk@invenio-finance.de",
-    "nicholas.traupe@wohnwerte-deutschland.de",
-    "info@ldp.group",
-    "maged@ldp.group",
-    "gero.schanze@proper-union.de",
-    "pierre.ibanda@proper-api.de",
-    "kontakt@wgkonzepte.de",
-    "t.mesletzky@mf-gmbh.immo",
-    "f.mouth@mf-gmbh.immo",
-    "oliver.volz@newego-re.de",
-    "info@cdl-immobilien.de",
-    "l.schaut@expats-invest.de",
-]
+# Allowlist: aus DB (fin_partners) mit Cache
+_allowlist_cache = {"emails": set(), "loaded_at": 0}
+_ALLOWLIST_CACHE_TTL = 300  # 5 Minuten
+
+
+def _get_allowlist() -> set:
+    """Lädt Partner-E-Mails aus DB mit 5-Min-Cache."""
+    now = time.time()
+    if _allowlist_cache["emails"] and (now - _allowlist_cache["loaded_at"]) < _ALLOWLIST_CACHE_TTL:
+        return _allowlist_cache["emails"]
+    try:
+        rows = db.list_rows("fin_partners")
+        emails = {r["email"].lower().strip() for r in rows if r.get("email")}
+        _allowlist_cache["emails"] = emails
+        _allowlist_cache["loaded_at"] = now
+        logger.info(f"Allowlist refreshed: {len(emails)} partners")
+        return emails
+    except Exception as e:
+        logger.error(f"Failed to load allowlist from DB: {e}")
+        return _allowlist_cache["emails"]  # stale cache als Fallback
+
+
+def invalidate_allowlist_cache():
+    """Cache sofort invalidieren (nach Partner add/delete)."""
+    _allowlist_cache["loaded_at"] = 0
 
 OWN_DOMAIN = "@alexander-heil.com"
 
@@ -89,8 +98,8 @@ def gatekeeper(from_email: str, subject: str, conversation_id: str = None) -> di
             return {"pass": True, "reason": "internal_new_finance", "actor": "broker", "is_internal_reply": False, "force_triage": True}
         return {"pass": False, "reason": "outgoing_system_mail", "actor": None, "is_internal_reply": False}
 
-    # Externe Allowlist
-    if from_email not in ALLOWLIST:
+    # Externe Allowlist (aus DB)
+    if from_email not in _get_allowlist():
         return {"pass": False, "reason": "sender_not_allowlisted", "actor": None, "is_internal_reply": False}
 
     # Non-Finance Filter

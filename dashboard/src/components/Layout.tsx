@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom'
-import { LayoutDashboard, Inbox, Briefcase, Mail, LogOut, Menu, X, Zap } from 'lucide-react'
+import { LayoutDashboard, Inbox, Briefcase, Mail, Users, LogOut, Menu, X, Zap } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../api/client'
@@ -10,6 +10,7 @@ const navItems = [
   { to: '/app/triage', label: 'Triage', icon: Inbox, end: false },
   { to: '/app/cases', label: 'Cases', icon: Briefcase, end: false },
   { to: '/app/emails', label: 'Ausgehende Mails', icon: Mail, end: false },
+  { to: '/app/partners', label: 'Partner', icon: Users, end: false },
 ]
 
 function OpenAICreditsDisplay() {

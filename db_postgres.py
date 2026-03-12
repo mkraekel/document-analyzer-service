@@ -155,6 +155,13 @@ CREATE TABLE IF NOT EXISTS email_test_log (
     dry_run BOOLEAN DEFAULT true,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS fin_partners (
+    _id TEXT PRIMARY KEY,
+    email TEXT UNIQUE NOT NULL,
+    name TEXT DEFAULT '',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
 """
 
 
@@ -171,6 +178,35 @@ ALTER TABLE email_test_log ADD COLUMN IF NOT EXISTS case_id TEXT DEFAULT '';
 """
 
 
+def _seed_partners(conn):
+    """Seed initial allowlist partners if table is empty."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM fin_partners")
+        if cur.fetchone()[0] > 0:
+            return
+        INITIAL = [
+            ("l.safi@muniqre.com", "MuniqRe"),
+            ("a.sergejcuk@invenio-finance.de", "Invenio Finance"),
+            ("nicholas.traupe@wohnwerte-deutschland.de", "Wohnwerte Deutschland"),
+            ("info@ldp.group", "LDP Group"),
+            ("maged@ldp.group", "LDP Group"),
+            ("gero.schanze@proper-union.de", "Proper Union"),
+            ("pierre.ibanda@proper-api.de", "Proper API"),
+            ("kontakt@wgkonzepte.de", "WG Konzepte"),
+            ("t.mesletzky@mf-gmbh.immo", "MF GmbH"),
+            ("f.mouth@mf-gmbh.immo", "MF GmbH"),
+            ("oliver.volz@newego-re.de", "Newego RE"),
+            ("info@cdl-immobilien.de", "CDL Immobilien"),
+            ("l.schaut@expats-invest.de", "Expats Invest"),
+        ]
+        for email, name in INITIAL:
+            cur.execute(
+                "INSERT INTO fin_partners (_id, email, name) VALUES (%s, %s, %s)",
+                (_new_id(), email, name),
+            )
+        logger.info(f"Seeded {len(INITIAL)} initial partners into fin_partners")
+
+
 def _init_tables():
     """Create all tables if they don't exist, then run migrations."""
     pool = _get_pool.__wrapped__() if hasattr(_get_pool, '__wrapped__') else None
@@ -180,6 +216,7 @@ def _init_tables():
         with conn.cursor() as cur:
             cur.execute(_SCHEMA_SQL)
             cur.execute(_MIGRATIONS_SQL)
+        _seed_partners(conn)
         conn.commit()
         logger.info("PostgreSQL tables initialized")
     except Exception as e:

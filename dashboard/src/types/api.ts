@@ -142,6 +142,13 @@ export interface OpenAICredits {
   error?: string
 }
 
+export interface Partner {
+  _id: string
+  email: string
+  name: string
+  created_at: string
+}
+
 export interface ApiResponse<T = unknown> {
   success?: boolean
   error?: string

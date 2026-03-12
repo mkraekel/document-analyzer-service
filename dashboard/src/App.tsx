@@ -7,6 +7,7 @@ import { Triage } from './pages/Triage'
 import { Cases } from './pages/Cases'
 import { CaseDetail } from './pages/CaseDetail'
 import { OutgoingEmails } from './pages/OutgoingEmails'
+import { Partners } from './pages/Partners'
 
 export function App() {
   return (
@@ -26,6 +27,7 @@ export function App() {
         <Route path="cases" element={<Cases />} />
         <Route path="cases/:caseId" element={<CaseDetail />} />
         <Route path="emails" element={<OutgoingEmails />} />
+        <Route path="partners" element={<Partners />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/app" replace />} />

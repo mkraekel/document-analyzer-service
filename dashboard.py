@@ -123,12 +123,12 @@ async def _fetch_openai_credits() -> dict:
             )
             if costs_resp.status_code == 200:
                 costs_data = costs_resp.json()
-                total_cents = 0
+                total_usd = 0
                 for bucket in costs_data.get("data", []):
                     for item in bucket.get("results", []):
                         amount = item.get("amount", {})
-                        total_cents += amount.get("value", 0)
-                result["used_usd"] = round(total_cents / 100, 2)
+                        total_usd += amount.get("value", 0)
+                result["used_usd"] = round(total_usd, 2)
             else:
                 logger.warning(f"OpenAI costs endpoint returned {costs_resp.status_code}: {costs_resp.text[:200]}")
 
@@ -1229,4 +1229,65 @@ async def dashboard_import_case(case_id: str, req: ImportRequest = None):
         raise
     except Exception as e:
         logger.error(f"Dashboard import failed: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ──────────────────────────────────────────
+# Partner-Verwaltung
+# ──────────────────────────────────────────
+
+class AddPartnerRequest(BaseModel):
+    email: str
+    name: Optional[str] = ""
+
+
+@router.get("/api/partners")
+async def list_partners():
+    try:
+        rows = db.list_rows("fin_partners")
+        return {
+            "partners": [
+                {
+                    "_id": r["_id"],
+                    "email": r["email"],
+                    "name": r.get("name", ""),
+                    "created_at": str(r.get("created_at", "")),
+                }
+                for r in rows
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/partners")
+async def add_partner(req: AddPartnerRequest):
+    try:
+        email = req.email.lower().strip()
+        if not email or "@" not in email:
+            raise HTTPException(status_code=400, detail="Ungültige E-Mail-Adresse")
+        existing = db.search_rows("fin_partners", "email", email)
+        if existing:
+            raise HTTPException(status_code=409, detail="Partner existiert bereits")
+        db.create_row("fin_partners", {"email": email, "name": req.name or ""})
+        cases.invalidate_allowlist_cache()
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/api/partners/{partner_id}")
+async def delete_partner(partner_id: str):
+    try:
+        partner = db.get_row("fin_partners", partner_id)
+        if not partner:
+            raise HTTPException(status_code=404, detail="Partner nicht gefunden")
+        db.delete_rows("fin_partners", "_id", partner_id)
+        cases.invalidate_allowlist_cache()
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
