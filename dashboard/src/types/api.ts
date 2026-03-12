@@ -5,6 +5,16 @@ export interface DashboardStats {
   emails_by_result: Record<string, number>
   documents_total: number
   triage_count: number
+  errors_24h: number
+}
+
+export interface ErrorEntry {
+  id: string
+  case_id: string
+  error_type: string
+  message: string
+  source: string
+  created_at: string
 }
 
 export interface TriageEmail {

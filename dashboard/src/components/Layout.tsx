@@ -3,7 +3,7 @@ import { LayoutDashboard, Inbox, Briefcase, Mail, Users, LogOut, Menu, X, Zap } 
 import { useState, useEffect } from 'react'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../api/client'
-import type { OpenAICredits } from '../types/api'
+import type { OpenAICredits, DashboardStats } from '../types/api'
 
 const navItems = [
   { to: '/app', label: 'Übersicht', icon: LayoutDashboard, end: true },
@@ -62,6 +62,21 @@ function OpenAICreditsDisplay() {
 export function Layout() {
   const { user, logout } = useAuth()
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [errorCount, setErrorCount] = useState(0)
+
+  useEffect(() => {
+    const fetchErrors = async () => {
+      try {
+        const data = await api.get<DashboardStats>('/api/dashboard/stats')
+        setErrorCount(data.errors_24h || 0)
+      } catch {
+        // silently ignore
+      }
+    }
+    fetchErrors()
+    const interval = setInterval(fetchErrors, 60_000)
+    return () => clearInterval(interval)
+  }, [])
 
   return (
     <div className="flex h-screen overflow-hidden bg-gray-50">
@@ -101,6 +116,11 @@ export function Layout() {
             >
               <item.icon size={18} />
               {item.label}
+              {item.to === '/app' && errorCount > 0 && (
+                <span className="ml-auto bg-red-500 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">
+                  {errorCount > 99 ? '99+' : errorCount}
+                </span>
+              )}
             </NavLink>
           ))}
         </nav>

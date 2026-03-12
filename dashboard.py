@@ -80,6 +80,7 @@ async def dashboard_stats():
                 + emails_by_result.get("triage", 0)
                 + emails_by_result.get("irrelevant", 0)
             ),
+            "errors_24h": db.count_recent_errors(24),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -550,6 +551,7 @@ async def _scan_gdrive_and_recheck(case_id: str, links: list):
         await asyncio.to_thread(notify.dispatch_notifications, case_id, readiness_result)
     except Exception as e:
         logger.error(f"[{case_id}] GDrive scan on RECHECK failed: {e}")
+        db.log_error("background_task", str(e), source="gdrive_recheck", case_id=case_id)
 
 
 # ──────────────────────────────────────────
@@ -668,6 +670,7 @@ async def _trigger_setup_case(case_id: str, outlook_message_id: str, applicant_n
             logger.info(f"Setup-case webhook OK for {case_id}: {result.get('message', '')}")
     except Exception as e:
         logger.error(f"Setup-case webhook failed for {case_id}: {e}")
+        db.log_error("n8n_webhook", str(e), source="setup_case_webhook", case_id=case_id)
 
 
 # ──────────────────────────────────────────
@@ -893,6 +896,7 @@ async def _do_reanalyze(case_id: str):
             logger.info(f"Reanalyze GDrive sync: {sync_result}")
         except Exception as e:
             logger.error(f"Reanalyze GDrive sync failed: {e}")
+            db.log_error("background_task", str(e), source="reanalyze_gdrive", case_id=case_id)
             results["gdrive_error"] = str(e)
 
     # 2. OneDrive Scan → analysiert alle Dateien (GDrive + bestehende)
@@ -909,6 +913,7 @@ async def _do_reanalyze(case_id: str):
                 results["onedrive_scanned"] = scan_result.get("scanned", 0)
         except Exception as e:
             logger.error(f"Reanalyze OneDrive scan failed: {e}")
+            db.log_error("background_task", str(e), source="reanalyze_onedrive_scan", case_id=case_id)
             results["onedrive_error"] = str(e)
 
     # 3. Remap facts with full couple knowledge
@@ -979,6 +984,7 @@ async def _run_scan_background(case_id: str, folder_id: str, force: bool):
         logger.info(f"Scan background OneDrive done for {case_id}: {scanned} scanned")
     except Exception as e:
         logger.error(f"Scan background OneDrive failed for {case_id}: {e}")
+        db.log_error("background_task", str(e), source="scan_onedrive", case_id=case_id)
 
     # 3. Remap facts (couple detection) after scan
     try:
@@ -1042,6 +1048,7 @@ async def _run_gdrive_background(case_id: str, links: list):
             logger.warning(f"[{case_id}] No OneDrive folder — GDrive sync skipped")
     except Exception as e:
         logger.error(f"GDrive background failed for {case_id}: {e}")
+        db.log_error("background_task", str(e), source="gdrive_background", case_id=case_id)
 
 
 # ──────────────────────────────────────────
@@ -1230,6 +1237,42 @@ async def dashboard_import_case(case_id: str, req: ImportRequest = None):
         raise
     except Exception as e:
         logger.error(f"Dashboard import failed: {traceback.format_exc()}")
+        db.log_error("import", str(e), source="dashboard_import", case_id=case_id)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ──────────────────────────────────────────
+# API: Error Log
+# ──────────────────────────────────────────
+
+@router.get("/api/dashboard/errors")
+async def dashboard_errors(case_id: Optional[str] = None, limit: int = 50):
+    """Letzte Fehler, optional nach case_id gefiltert."""
+    try:
+        where = "case_id = %s" if case_id else None
+        params = (case_id,) if case_id else None
+        errors = db.query_rows(
+            "fin_errors",
+            ["_id", "case_id", "error_type", "message", "source", "created_at"],
+            where=where,
+            where_params=params,
+            order_by="created_at DESC",
+            limit=min(limit, 200),
+        )
+        return {
+            "errors": [
+                {
+                    "id": e["_id"],
+                    "case_id": e["case_id"],
+                    "error_type": e["error_type"],
+                    "message": e["message"],
+                    "source": e["source"],
+                    "created_at": e["created_at"].isoformat() if hasattr(e["created_at"], "isoformat") else str(e["created_at"]),
+                }
+                for e in errors
+            ],
+        }
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 

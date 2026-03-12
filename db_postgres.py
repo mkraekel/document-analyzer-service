@@ -162,6 +162,17 @@ CREATE TABLE IF NOT EXISTS fin_partners (
     name TEXT DEFAULT '',
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS fin_errors (
+    _id TEXT PRIMARY KEY,
+    case_id TEXT DEFAULT '',
+    error_type TEXT DEFAULT '',
+    message TEXT DEFAULT '',
+    source TEXT DEFAULT '',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_fin_errors_case_id ON fin_errors (case_id);
+CREATE INDEX IF NOT EXISTS idx_fin_errors_created_at ON fin_errors (created_at DESC);
 """
 
 
@@ -589,6 +600,37 @@ def query_rows(table_name: str, columns: list[str], where: str = None,
     except Exception as e:
         logger.error(f"PG query_rows({table_name}) failed: {e}")
         return []
+
+
+# ──────────────────────────────────────────
+# Error Logging
+# ──────────────────────────────────────────
+
+def log_error(error_type: str, message: str, source: str = "", case_id: str = ""):
+    """Log an error to fin_errors. Non-fatal: never raises."""
+    try:
+        create_row("fin_errors", {
+            "case_id": case_id,
+            "error_type": error_type,
+            "message": str(message)[:2000],
+            "source": source,
+        })
+    except Exception:
+        pass  # Error-Logging darf nie crashen
+
+
+def count_recent_errors(hours: int = 24) -> int:
+    """Count errors in the last N hours."""
+    try:
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*) FROM fin_errors WHERE created_at > NOW() - make_interval(hours => %s)",
+                    (hours,),
+                )
+                return cur.fetchone()[0]
+    except Exception:
+        return 0
 
 
 # ──────────────────────────────────────────

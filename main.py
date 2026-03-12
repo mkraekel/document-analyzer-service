@@ -710,6 +710,7 @@ def analyze_with_gpt4o(file_bytes: bytes, mime_type: str, filename: str) -> dict
         }
     except Exception as e:
         logger.error(f"OpenAI API Error: {e}")
+        db.log_error("gpt_analysis", str(e), source="analyze_with_gpt4o")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1991,6 +1992,7 @@ async def process_email(request: ProcessEmailRequest):
     except Exception as e:
         tb = traceback.format_exc()
         logger.error(f"process-email unhandled error: {tb}")
+        db.log_error("email_process", str(e), source="process_email")
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
@@ -2045,6 +2047,7 @@ async def _process_gdrive_async(case_id: str, links: list):
                 await asyncio.to_thread(notify.dispatch_notifications, case_id, readiness_result)
     except Exception as e:
         logger.error(f"[{case_id}] Google Drive async processing failed: {e}")
+        db.log_error("background_task", str(e), source="gdrive_async", case_id=case_id)
 
 
 # Interne Domains die NICHT als partner_email verwendet werden sollen
@@ -2283,6 +2286,7 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
             import_builder.create_finlink_lead(case_id, facts, applicant_name, partner_email_for_case)
         except Exception as _fl_err:
             logger.error(f"[{case_id}] Finlink lead creation failed: {_fl_err}")
+            db.log_error("import", str(_fl_err), source="finlink_lead", case_id=case_id)
 
     elif match["action"] == "update":
         cases.update_case_conversation(case_id, request.conversation_id)
@@ -2462,6 +2466,7 @@ async def ingest_answers(request: IngestAnswersRequest):
             notify.dispatch_notifications(request.case_id, readiness_result)
         except Exception as notify_err:
             logger.error(f"dispatch_notifications failed (non-fatal): {notify_err}")
+            db.log_error("email_send", str(notify_err), source="dispatch_notifications", case_id=request.case_id)
 
         return IngestAnswersResponse(
             success=True,
@@ -2494,6 +2499,7 @@ async def full_readiness_check(request: FullReadinessRequest):
         return result
     except Exception as e:
         logger.error(f"full-readiness-check failed: {e}")
+        db.log_error("readiness", str(e), source="full_readiness_check", case_id=request.case_id)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -2786,6 +2792,7 @@ def check_and_send_reminders() -> dict:
             notify.send_reminder(case_id, readiness_result, reminder_count + 1, target=target)
         except Exception as e:
             logger.error(f"Reminder-Versand fehlgeschlagen für {case_id}: {e}")
+            db.log_error("email_send", str(e), source="send_reminder", case_id=case_id)
             skipped_reasons["error"] += 1
             continue
 
@@ -2851,6 +2858,7 @@ async def check_reminders():
         }
     except Exception as e:
         logger.error(f"Reminder-Check fehlgeschlagen: {e}")
+        db.log_error("background_task", str(e), source="reminder_check")
         return JSONResponse(
             status_code=500,
             content={"success": False, "error": str(e)},
@@ -2924,6 +2932,7 @@ async def process_google_drive(request: ProcessGoogleDriveRequest):
         )
     except Exception as e:
         logger.error(f"process-google-drive failed: {traceback.format_exc()}")
+        db.log_error("background_task", str(e), source="process_google_drive", case_id=request.case_id)
         return ProcessGoogleDriveResponse(
             success=False, case_id=request.case_id,
             errors=[f"Unerwarteter Fehler: {e}"],
@@ -2960,6 +2969,7 @@ async def import_case(request: ImportCaseRequest):
         return ImportCaseResponse(**result)
     except Exception as e:
         logger.error(f"Import failed for {request.case_id}: {e}")
+        db.log_error("import", str(e), source="execute_import", case_id=request.case_id)
         return ImportCaseResponse(
             success=False,
             case_id=request.case_id,

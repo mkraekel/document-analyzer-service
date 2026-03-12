@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, ExternalLink, RefreshCw, Check, FileText,
-  Mail, Clock, Shield, ChevronDown, ChevronUp, Pencil, X as XIcon, Save, Eye, Loader, Archive, XCircle, Send
+  Mail, Clock, Shield, ChevronDown, ChevronUp, Pencil, X as XIcon, Save, Eye, Loader, Archive, XCircle, Send, AlertTriangle
 } from 'lucide-react'
 import { useApiGet } from '../hooks/useApi'
 import { useToast } from '../hooks/useToast'
@@ -11,7 +11,7 @@ import { StatusBadge } from '../components/StatusBadge'
 import { LoadingSpinner } from '../components/LoadingSpinner'
 import { formatTime, formatDateTime, fieldLabel, flattenObject } from '../lib/format'
 import { api } from '../api/client'
-import type { CaseDetail as CaseDetailType, CaseDocument } from '../types/api'
+import type { CaseDetail as CaseDetailType, CaseDocument, ErrorEntry } from '../types/api'
 
 function findValue(view: Record<string, unknown>, ...paths: string[]): string {
   for (const path of paths) {
@@ -114,6 +114,9 @@ export function CaseDetail() {
   const navigate = useNavigate()
   const { data: caseData, loading, refetch } = useApiGet<CaseDetailType>(
     `/api/dashboard/case/${caseId}`,
+  )
+  const { data: errorsData } = useApiGet<{ errors: ErrorEntry[] }>(
+    `/api/dashboard/errors?case_id=${caseId}`,
   )
   const { toasts, addToast, removeToast } = useToast()
   const [busy, setBusy] = useState(false)
@@ -1065,6 +1068,27 @@ export function CaseDetail() {
           </div>
         </div>
       </Section>
+
+      {/* Errors */}
+      {(errorsData?.errors || []).length > 0 && (
+        <Section
+          title={`Fehler (${errorsData!.errors.length})`}
+          icon={<AlertTriangle size={18} />}
+          isOpen={expandedSections.has('errors')}
+          onToggle={() => toggleSection('errors')}
+        >
+          <div className="space-y-1">
+            {errorsData!.errors.map(err => (
+              <div key={err.id} className="flex items-start gap-3 text-xs py-1.5 border-b border-gray-50">
+                <span className="text-gray-400 w-32 shrink-0">{formatDateTime(err.created_at)}</span>
+                <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-medium shrink-0">{err.error_type}</span>
+                <span className="text-gray-700 truncate flex-1" title={err.message}>{err.message}</span>
+                {err.source && <span className="text-gray-400 shrink-0">{err.source}</span>}
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
 
       {/* Audit Log */}
       <Section

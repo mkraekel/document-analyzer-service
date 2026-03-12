@@ -100,6 +100,11 @@ def _send_email(to: str, subject: str, html_body: str, text_body: str = None, ca
         _log_to_db(to, subject, html_body, text_body, case_id=case_id)
     except Exception as e:
         logger.error(f"n8n E-Mail-Versand fehlgeschlagen fuer {to}: {e}")
+        try:
+            import db_postgres as _db
+            _db.log_error("email_send", f"{to}: {e}", source="notify._send_email", case_id=case_id or "")
+        except Exception:
+            pass
         _log_to_db(to, subject, html_body, text_body, case_id=case_id)
         raise
 

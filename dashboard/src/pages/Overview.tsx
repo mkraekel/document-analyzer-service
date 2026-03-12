@@ -1,10 +1,10 @@
 import { useNavigate } from 'react-router-dom'
-import { Briefcase, Inbox, FileText, Mail, ArrowRight, AlertCircle } from 'lucide-react'
+import { Briefcase, Inbox, FileText, Mail, ArrowRight, AlertCircle, AlertTriangle } from 'lucide-react'
 import { useApiGet } from '../hooks/useApi'
 import { LoadingSpinner } from '../components/LoadingSpinner'
 import { StatusBadge, STATUS_LABELS } from '../components/StatusBadge'
 import { formatTime, fieldLabel } from '../lib/format'
-import type { DashboardStats, CaseListItem } from '../types/api'
+import type { DashboardStats, CaseListItem, ErrorEntry } from '../types/api'
 
 const STATUS_COLORS: Record<string, string> = {
   INTAKE: 'bg-gray-400',
@@ -22,16 +22,40 @@ const ACTION_STATUSES = new Set([
   'READY_FOR_IMPORT',
 ])
 
+const ERROR_TYPE_LABELS: Record<string, string> = {
+  gpt_analysis: 'GPT',
+  email_send: 'E-Mail',
+  email_process: 'E-Mail',
+  background_task: 'Hintergrund',
+  n8n_webhook: 'n8n',
+  import: 'Import',
+  readiness: 'Readiness',
+  document_process: 'Dokument',
+}
+
+const ERROR_TYPE_COLORS: Record<string, string> = {
+  gpt_analysis: 'bg-red-100 text-red-700',
+  email_send: 'bg-orange-100 text-orange-700',
+  email_process: 'bg-orange-100 text-orange-700',
+  background_task: 'bg-blue-100 text-blue-700',
+  n8n_webhook: 'bg-purple-100 text-purple-700',
+  import: 'bg-red-100 text-red-700',
+  readiness: 'bg-yellow-100 text-yellow-700',
+  document_process: 'bg-amber-100 text-amber-700',
+}
+
 export function Overview() {
   const navigate = useNavigate()
   const { data: stats, loading: statsLoading } = useApiGet<DashboardStats>('/api/dashboard/stats')
   const { data: casesData, loading: casesLoading } = useApiGet<{ cases: CaseListItem[] }>('/api/dashboard/cases')
+  const { data: errorsData } = useApiGet<{ errors: ErrorEntry[] }>('/api/dashboard/errors?limit=10')
 
   if (statsLoading || !stats) return <LoadingSpinner />
 
   const cases = casesData?.cases || []
   const actionCases = cases.filter(c => ACTION_STATUSES.has(c.status))
   const recentCases = cases.slice(0, 5)
+  const errors = errorsData?.errors || []
 
   const cards = [
     {
@@ -88,6 +112,20 @@ export function Overview() {
           </button>
         ))}
       </div>
+
+      {/* Errors Banner */}
+      {stats.errors_24h > 0 && (
+        <div className="mb-6 bg-red-50 border border-red-200 rounded-xl p-4 flex items-center gap-3">
+          <div className="w-9 h-9 rounded-lg flex items-center justify-center bg-red-100 text-red-600 shrink-0">
+            <AlertTriangle size={18} />
+          </div>
+          <div>
+            <span className="text-sm font-medium text-red-800">
+              {stats.errors_24h} {stats.errors_24h === 1 ? 'Fehler' : 'Fehler'} in den letzten 24 Stunden
+            </span>
+          </div>
+        </div>
+      )}
 
       <div className="grid lg:grid-cols-2 gap-6 mb-6">
         {/* Action Required */}
@@ -180,6 +218,39 @@ export function Overview() {
           </div>
         </div>
       </div>
+
+      {/* Recent Errors */}
+      {errors.length > 0 && (
+        <div className="bg-white rounded-xl border border-red-200 p-6 mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+              <AlertTriangle size={18} className="text-red-500" />
+              Letzte Fehler
+            </h2>
+          </div>
+          <div className="space-y-2">
+            {errors.map(err => (
+              <div
+                key={err.id}
+                className={`flex items-start gap-3 px-3 py-2.5 rounded-lg hover:bg-gray-50 transition-colors ${err.case_id ? 'cursor-pointer' : ''}`}
+                onClick={() => err.case_id && navigate(`/app/cases/${err.case_id}`)}
+              >
+                <span className={`text-xs font-medium px-2 py-0.5 rounded-full shrink-0 mt-0.5 ${ERROR_TYPE_COLORS[err.error_type] || 'bg-gray-100 text-gray-700'}`}>
+                  {ERROR_TYPE_LABELS[err.error_type] || err.error_type}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm text-gray-900 truncate">{err.message}</p>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <span className="text-xs text-gray-400">{formatTime(err.created_at)}</span>
+                    {err.case_id && <span className="text-xs text-blue-600">{err.case_id}</span>}
+                    {err.source && <span className="text-xs text-gray-400">{err.source}</span>}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Recent Cases */}
       {!casesLoading && recentCases.length > 0 && (

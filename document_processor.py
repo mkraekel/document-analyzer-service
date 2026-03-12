@@ -964,6 +964,7 @@ class DocumentProcessor:
                 except Exception as e:
                     err_msg = str(e)
                     logger.error(f"[{case_id}] Failed to process {fname}: {err_msg}")
+                    db.log_error("document_process", f"{fname}: {err_msg}", source="batch_process", case_id=case_id)
                     results.append(FileResult(filename=fname, success=False, error=err_msg))
                     errors.append(f"{fname}: {err_msg}")
                     _queue_update(case_id, fname, status="error", error=err_msg, finished_at=datetime.utcnow().isoformat())
@@ -1096,6 +1097,7 @@ class DocumentProcessor:
                 result = self._analyze_fn(file.file_bytes, file.mime_type, file.filename)
             except Exception as e:
                 logger.error(f"[{case_id}] Document analysis failed for {file.filename}: {e}")
+                db.log_error("gpt_analysis", f"{file.filename}: {e}", source="single_process", case_id=case_id)
                 _queue_update(case_id, file.filename, status="error", error=str(e), finished_at=datetime.utcnow().isoformat())
                 db.create_row("fin_documents", {
                     "caseId": case_id,
