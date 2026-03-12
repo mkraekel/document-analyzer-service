@@ -111,26 +111,33 @@ async def _fetch_openai_credits() -> dict:
 
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            # Costs API: daily spend for current month
-            import calendar
+            # Costs API: daily spend for current month (paginated)
             from datetime import date
             today = date.today()
             month_start = int(datetime(today.year, today.month, 1).timestamp())
 
-            costs_resp = await client.get(
-                f"https://api.openai.com/v1/organization/costs?start_time={month_start}&bucket_width=1d",
-                headers=headers,
-            )
-            if costs_resp.status_code == 200:
+            total_usd = 0.0
+            url = f"https://api.openai.com/v1/organization/costs?start_time={month_start}&bucket_width=1d"
+            while url:
+                costs_resp = await client.get(url, headers=headers)
+                if costs_resp.status_code != 200:
+                    logger.warning(f"OpenAI costs endpoint returned {costs_resp.status_code}: {costs_resp.text[:200]}")
+                    break
                 costs_data = costs_resp.json()
-                total_usd = 0
                 for bucket in costs_data.get("data", []):
                     for item in bucket.get("results", []):
                         amount = item.get("amount", {})
-                        total_usd += amount.get("value", 0)
-                result["used_usd"] = round(total_usd, 2)
-            else:
-                logger.warning(f"OpenAI costs endpoint returned {costs_resp.status_code}: {costs_resp.text[:200]}")
+                        try:
+                            total_usd += float(amount.get("value", 0))
+                        except (ValueError, TypeError):
+                            pass
+                # Next page
+                next_page = costs_data.get("next_page")
+                if costs_data.get("has_more") and next_page:
+                    url = f"https://api.openai.com/v1/organization/costs?start_time={month_start}&bucket_width=1d&page={next_page}"
+                else:
+                    url = None
+            result["used_usd"] = round(total_usd, 2)
 
         result["fetched_at"] = datetime.utcnow().isoformat()
         _openai_credits_cache["data"] = result
