@@ -455,31 +455,6 @@ export function CaseDetail() {
             <div className="hidden sm:block w-px h-9 bg-gray-200" />
 
             {/* Tools */}
-            <div>
-              <span className="block text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1">Tools</span>
-              <div className="flex gap-1.5">
-                <button
-                  onClick={async () => {
-                    setBusy(true)
-                    try {
-                      await api.post(`/api/dashboard/case/${caseId}/test-mail`)
-                      addToast('Test-Mail generiert – siehe Ausgehende E-Mails', 'info')
-                    } catch (e) {
-                      addToast(e instanceof Error ? e.message : 'Fehler', 'error')
-                    } finally {
-                      setBusy(false)
-                    }
-                  }}
-                  disabled={busy}
-                  title="Test-Mail generieren (erscheint unter Ausgehende E-Mails)"
-                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-blue-300 text-blue-700 rounded-lg hover:bg-blue-50 disabled:opacity-50 transition-colors"
-                >
-                  <Mail size={14} />
-                  Test-Mail
-                </button>
-              </div>
-            </div>
-
             {/* Import – only when ready */}
             {c.status === 'READY_FOR_IMPORT' && (
               <>
