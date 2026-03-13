@@ -120,6 +120,7 @@ export function CaseDetail() {
   )
   const { toasts, addToast, removeToast } = useToast()
   const [busy, setBusy] = useState(false)
+  const [pendingAction, setPendingAction] = useState<string | null>(null)
   const [showAllDocs, setShowAllDocs] = useState(false)
   const [docFilterType, setDocFilterType] = useState('')
   const [docSortField, setDocSortField] = useState<'file_name' | 'doc_type' | 'processed_at' | ''>('')
@@ -160,6 +161,7 @@ export function CaseDetail() {
         const wasProcessing = prevActiveCount.current !== null && prevActiveCount.current > 0
         prevActiveCount.current = q.active.length
         if (wasProcessing && q.active.length === 0) {
+          setPendingAction(null)
           refetch()
         }
       } catch { /* ignore */ }
@@ -263,12 +265,13 @@ export function CaseDetail() {
 
   async function scanDocuments() {
     setBusy(true)
+    setPendingAction('SCAN')
     try {
       await api.post(`/api/dashboard/case/${caseId}/scan-documents`)
       addToast('Dokumente werden gescannt...', 'info')
-      setTimeout(refetch, 3000)
     } catch (e) {
       addToast(e instanceof Error ? e.message : 'Fehler', 'error')
+      setPendingAction(null)
     } finally {
       setBusy(false)
     }
@@ -277,14 +280,13 @@ export function CaseDetail() {
   async function doReanalyze() {
     if (!confirm('Alle Dokumente werden neu analysiert. Extrahierte Daten werden zurückgesetzt. Fortfahren?')) return
     setBusy(true)
+    setPendingAction('REANALYZE')
     try {
       await api.post(`/api/dashboard/case/${caseId}/action`, { action: 'REANALYZE' })
       addToast('Neuanalyse gestartet – läuft im Hintergrund', 'info')
-      // Regelmäßig refreshen um Fortschritt zu zeigen
-      const interval = setInterval(refetch, 10000)
-      setTimeout(() => clearInterval(interval), 120000)
     } catch (e) {
       addToast(e instanceof Error ? e.message : 'Fehler bei Neuanalyse', 'error')
+      setPendingAction(null)
     } finally {
       setBusy(false)
     }
@@ -396,7 +398,7 @@ export function CaseDetail() {
               <div className="flex gap-1.5">
                 <button
                   onClick={() => doAction('RECHECK')}
-                  disabled={busy}
+                  disabled={busy || !!pendingAction}
                   title="Readiness-Check erneut ausführen"
                   className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors"
                 >
@@ -405,12 +407,12 @@ export function CaseDetail() {
                 </button>
                 <button
                   onClick={doReanalyze}
-                  disabled={busy}
+                  disabled={busy || pendingAction === 'REANALYZE'}
                   title="Alle Dokumente komplett neu analysieren (GPT)"
                   className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-orange-300 text-orange-700 rounded-lg hover:bg-orange-50 disabled:opacity-50 transition-colors"
                 >
-                  <RefreshCw size={14} />
-                  Neu analysieren
+                  {pendingAction === 'REANALYZE' ? <Loader size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                  {pendingAction === 'REANALYZE' ? 'Analyse läuft...' : 'Neu analysieren'}
                 </button>
               </div>
             </div>
@@ -487,6 +489,24 @@ export function CaseDetail() {
           </div>
         </div>
       </div>
+
+      {/* Pending Action Banner */}
+      {pendingAction && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 mb-4 flex items-center gap-3">
+          <Loader size={16} className="animate-spin text-blue-600 shrink-0" />
+          <span className="text-sm font-medium text-blue-800">
+            {pendingAction === 'REANALYZE' && 'Neuanalyse läuft – Dokumente werden verarbeitet...'}
+            {pendingAction === 'SCAN' && 'OneDrive-Scan läuft – Dokumente werden geladen...'}
+          </span>
+          {queue && (queue.total_processing > 0 || queue.total_queued > 0) && (
+            <span className="text-xs text-blue-600 ml-auto">
+              {queue.total_processing > 0 && `${queue.total_processing} in Analyse`}
+              {queue.total_processing > 0 && queue.total_queued > 0 && ', '}
+              {queue.total_queued > 0 && `${queue.total_queued} wartend`}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Import Erfolg */}
       {c.status === 'IMPORTED' && (
