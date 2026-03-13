@@ -791,13 +791,13 @@ def _map_extracted_to_facts(doc_type: str, extracted: dict,
 
 # ── OneDrive Upload ──────────────────────────────────────────────
 
-def _upload_to_onedrive(case_id: str, filename: str, file_bytes: bytes, mime: str, onedrive_folder_id: str, doc_type: str = ""):
-    """Upload a file to OneDrive via n8n webhook (best-effort, non-blocking)."""
+def _upload_to_onedrive(case_id: str, filename: str, file_bytes: bytes, mime: str, onedrive_folder_id: str, doc_type: str = "") -> str:
+    """Upload a file to OneDrive via n8n webhook. Returns onedrive_file_id or empty string."""
     import httpx
 
     webhook_url = os.getenv("N8N_ONEDRIVE_UPLOAD_WEBHOOK", "")
     if not webhook_url or not onedrive_folder_id:
-        return
+        return ""
 
     try:
         b64 = base64.b64encode(file_bytes).decode("utf-8")
@@ -817,11 +817,45 @@ def _upload_to_onedrive(case_id: str, filename: str, file_bytes: bytes, mime: st
             timeout=60,
         )
         if resp.status_code == 200:
-            logger.info(f"[{case_id}] Uploaded to OneDrive: {filename}")
+            file_id = resp.json().get("onedrive_file_id", "")
+            logger.info(f"[{case_id}] Uploaded to OneDrive: {filename} (file_id={file_id})")
+            return file_id
         else:
             logger.warning(f"[{case_id}] OneDrive upload failed ({resp.status_code}): {filename}")
+            return ""
     except Exception as e:
         logger.warning(f"[{case_id}] OneDrive upload error for {filename}: {e}")
+        return ""
+
+
+def _move_onedrive_file(case_id: str, file_id: str, target_folder_name: str, case_folder_id: str):
+    """Move a file into a doc_type subfolder via n8n webhook (best-effort)."""
+    import httpx
+
+    webhook_url = os.getenv("N8N_ONEDRIVE_MOVE_WEBHOOK", "")
+    if not webhook_url or not file_id or not target_folder_name or not case_folder_id:
+        return
+
+    try:
+        api_key = os.getenv("N8N_WEBHOOK_API_KEY", "")
+        headers = {"X-API-Key": api_key} if api_key else {}
+        resp = httpx.post(
+            webhook_url,
+            headers=headers,
+            json={
+                "case_id": case_id,
+                "file_id": file_id,
+                "target_folder_name": target_folder_name,
+                "case_folder_id": case_folder_id,
+            },
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            logger.info(f"[{case_id}] Moved to subfolder '{target_folder_name}': {file_id}")
+        else:
+            logger.warning(f"[{case_id}] OneDrive move failed ({resp.status_code}): {file_id}")
+    except Exception as e:
+        logger.warning(f"[{case_id}] OneDrive move error for {file_id}: {e}")
 
 
 # ── DocumentProcessor class ─────────────────────────────────────
@@ -956,8 +990,15 @@ class DocumentProcessor:
                     files_processed += 1
 
                     # Upload to OneDrive immediately after analysis (best-effort)
+                    _uploaded_file_id = ""
                     if upload_to_onedrive_folder and file_input.file_bytes:
-                        _upload_to_onedrive(case_id, fname, file_input.file_bytes, file_input.mime_type, upload_to_onedrive_folder, doc_type=doc_type)
+                        _uploaded_file_id = _upload_to_onedrive(case_id, fname, file_input.file_bytes, file_input.mime_type, upload_to_onedrive_folder)
+
+                    # Move file into doc_type subfolder (best-effort)
+                    _case_folder_id = upload_to_onedrive_folder or (case.get("onedrive_folder_id") if case else "")
+                    _file_id_for_move = _uploaded_file_id or file_input.onedrive_file_id or ""
+                    if _file_id_for_move and _case_folder_id and doc_type and doc_type != "Sonstiges":
+                        _move_onedrive_file(case_id, _file_id_for_move, doc_type, _case_folder_id)
 
                     _queue_update(case_id, fname, status="done", doc_type=doc_type, finished_at=datetime.utcnow().isoformat())
                     logger.info(f"[{case_id}] Analyzed: {fname} -> {doc_type}")

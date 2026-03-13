@@ -2328,7 +2328,12 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
                 docs_processed.append({"filename": filename, "success": False, "error": str(e)})
 
         if files:
-            batch_result = processor.process_batch(case_id, files)
+            # Upload zu OneDrive wenn Case bereits einen Ordner hat
+            folder_id = ""
+            if not is_new:
+                _case_data = cases.load_case(case_id)
+                folder_id = _case_data.get("onedrive_folder_id", "") if _case_data else ""
+            batch_result = processor.process_batch(case_id, files, upload_to_onedrive_folder=folder_id)
             docs_processed = batch_result.get("results", [])
 
     # 7. Readiness Check + Notifications (immer, nachdem alles verarbeitet ist)

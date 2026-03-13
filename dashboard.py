@@ -751,6 +751,7 @@ async def dashboard_update_field(case_id: str, req: UpdateFieldRequest):
 class CheckFileRequest(BaseModel):
     case_id: str
     onedrive_file_id: str
+    filename: str = ""
     force_reanalyze: bool = False
 
 @router.post("/api/dashboard/check-file-processed")
@@ -763,6 +764,12 @@ async def check_file_processed(req: CheckFileRequest):
         for d in docs:
             if d.get("onedrive_file_id") == req.onedrive_file_id:
                 return {"already_processed": True, "doc_type": d.get("doc_type")}
+        # Fallback: file_name Match — nur wenn Row KEIN onedrive_file_id hat
+        # (sonst würde eine manuell hochgeladene Version nie analysiert)
+        if req.filename:
+            for d in docs:
+                if d.get("file_name") == req.filename and not d.get("onedrive_file_id"):
+                    return {"already_processed": True, "doc_type": d.get("doc_type")}
         return {"already_processed": False}
     except Exception as e:
         logger.error(f"check-file-processed failed: {e}")
@@ -848,9 +855,12 @@ def _clear_facts_for_reanalyze(case: dict):
         "facts_extracted": json.dumps({}),
         "audit_log": json.dumps(audit),
     })
-    # 2. Alle Dokument-Records löschen (werden bei Neuanalyse neu erstellt)
-    result = db.delete_rows("fin_documents", "caseId", case_id)
-    logger.info(f"Reanalyze: cleared facts + deleted {result.get('deleted_rows', 0)} docs for {case_id}")
+    # 2. Dokument-Records zurücksetzen (nicht löschen — onedrive_file_id bleibt erhalten)
+    reset_count = db.update_where("fin_documents", "caseId", case_id, {
+        "doc_type": "Sonstiges",
+        "extracted_data": json.dumps({}),
+    })
+    logger.info(f"Reanalyze: cleared facts + reset {reset_count} docs for {case_id}")
 
 
 async def _do_reanalyze(case_id: str):

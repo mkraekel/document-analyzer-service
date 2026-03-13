@@ -396,6 +396,26 @@ def delete_rows(table_name: str, column: str, value) -> dict:
         raise
 
 
+def update_where(table_name: str, where_col: str, where_val, updates: dict) -> int:
+    """UPDATE ... SET ... WHERE column = value. Returns number of affected rows."""
+    try:
+        set_parts = []
+        params = []
+        for k, v in updates.items():
+            set_parts.append(f"{_quote_col(k)} = %s")
+            params.append(v)
+        params.append(where_val)
+        sql = f"UPDATE {table_name} SET {', '.join(set_parts)} WHERE {_quote_col(where_col)} = %s"
+        with _get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                conn.commit()
+                return cur.rowcount
+    except Exception as e:
+        logger.error(f"PG update_where({table_name}) failed: {e}")
+        return 0
+
+
 def batch_create_rows(table_name: str, rows: list[dict]) -> dict:
     """Insert multiple rows in a single transaction."""
     if not rows:
