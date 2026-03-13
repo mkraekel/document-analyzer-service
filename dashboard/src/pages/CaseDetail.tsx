@@ -267,19 +267,11 @@ export function CaseDetail() {
     setBusy(true)
     setPendingAction('GDRIVE')
     try {
-      const res = await api.post<{ files_uploaded?: number; files_skipped?: number; errors?: string[] }>(
-        `/api/dashboard/case/${caseId}/process-gdrive`, {}
-      )
-      if (res.files_uploaded) {
-        addToast(`${res.files_uploaded} Dateien von Google Drive synchronisiert`, 'success')
-      } else if (res.files_skipped) {
-        addToast('Alle Dateien bereits vorhanden', 'info')
-        setPendingAction(null)
-      } else {
-        addToast(res.errors?.join(', ') || 'Keine Dateien gefunden', 'error')
-        setPendingAction(null)
-      }
-      refetch()
+      await api.post(`/api/dashboard/case/${caseId}/process-gdrive`, {})
+      addToast('Google Drive Sync gestartet – Dateien werden im Hintergrund übertragen', 'info')
+      // Poll for completion — refetch every 5s for up to 3 min
+      const interval = setInterval(refetch, 5000)
+      setTimeout(() => { clearInterval(interval); setPendingAction(null) }, 180000)
     } catch (e) {
       addToast(e instanceof Error ? e.message : 'GDrive-Sync fehlgeschlagen', 'error')
       setPendingAction(null)
