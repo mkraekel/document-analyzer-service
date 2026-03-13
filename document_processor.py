@@ -157,7 +157,8 @@ def _is_primary_applicant(person_name: str, case_applicant_name: str) -> bool:
         pn_last = " ".join(pn_parts[1:])
         cn_last = " ".join(cn_parts[1:])
         last_match = (pn_last == cn_last
-                      or SequenceMatcher(None, pn_last, cn_last).ratio() >= 0.75)
+                      or SequenceMatcher(None, pn_last, cn_last).ratio() >= 0.75
+                      or cn_last in pn_last or pn_last in cn_last)
         if last_match and not first_match:
             return False  # Same family, different first name → partner
 
