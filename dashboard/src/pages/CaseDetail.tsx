@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, ExternalLink, RefreshCw, Check, FileText,
-  Mail, Clock, Shield, ChevronDown, ChevronUp, Pencil, X as XIcon, Save, Eye, Loader, Archive, XCircle, Send, AlertTriangle
+  Mail, Clock, Shield, ChevronDown, ChevronUp, Pencil, X as XIcon, Save, Eye, Loader, Archive, XCircle, Send, AlertTriangle, CloudDownload
 } from 'lucide-react'
 import { useApiGet } from '../hooks/useApi'
 import { useToast } from '../hooks/useToast'
@@ -263,6 +263,31 @@ export function CaseDetail() {
     }
   }
 
+  async function syncGdrive() {
+    setBusy(true)
+    setPendingAction('GDRIVE')
+    try {
+      const res = await api.post<{ files_uploaded?: number; files_skipped?: number; errors?: string[] }>(
+        `/api/dashboard/case/${caseId}/process-gdrive`, {}
+      )
+      if (res.files_uploaded) {
+        addToast(`${res.files_uploaded} Dateien von Google Drive synchronisiert`, 'success')
+      } else if (res.files_skipped) {
+        addToast('Alle Dateien bereits vorhanden', 'info')
+        setPendingAction(null)
+      } else {
+        addToast(res.errors?.join(', ') || 'Keine Dateien gefunden', 'error')
+        setPendingAction(null)
+      }
+      refetch()
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : 'GDrive-Sync fehlgeschlagen', 'error')
+      setPendingAction(null)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function scanDocuments() {
     setBusy(true)
     setPendingAction('SCAN')
@@ -414,6 +439,17 @@ export function CaseDetail() {
                   {pendingAction === 'REANALYZE' ? <Loader size={14} className="animate-spin" /> : <RefreshCw size={14} />}
                   {pendingAction === 'REANALYZE' ? 'Analyse läuft...' : 'Neu analysieren'}
                 </button>
+                {(c.google_drive_links || []).length > 0 && (
+                  <button
+                    onClick={syncGdrive}
+                    disabled={busy || pendingAction === 'GDRIVE'}
+                    title="Dateien aus Google Drive nach OneDrive synchronisieren"
+                    className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-emerald-300 text-emerald-700 rounded-lg hover:bg-emerald-50 disabled:opacity-50 transition-colors"
+                  >
+                    {pendingAction === 'GDRIVE' ? <Loader size={14} className="animate-spin" /> : <CloudDownload size={14} />}
+                    {pendingAction === 'GDRIVE' ? 'Sync läuft...' : 'GDrive Sync'}
+                  </button>
+                )}
               </div>
             </div>
 
@@ -497,6 +533,7 @@ export function CaseDetail() {
           <span className="text-sm font-medium text-blue-800">
             {pendingAction === 'REANALYZE' && 'Neuanalyse läuft – Dokumente werden verarbeitet...'}
             {pendingAction === 'SCAN' && 'OneDrive-Scan läuft – Dokumente werden geladen...'}
+            {pendingAction === 'GDRIVE' && 'Google Drive Sync läuft – Dateien werden übertragen...'}
           </span>
           {queue && (queue.total_processing > 0 || queue.total_queued > 0) && (
             <span className="text-xs text-blue-600 ml-auto">
