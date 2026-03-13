@@ -656,6 +656,17 @@ async def dashboard_create_case(req: CreateCaseFromTriageRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _build_folder_name(applicant_name: str, case_id: str) -> str:
+    """Ordnername: Nachname_Vorname_CaseID (z.B. Moreno_Victor_CASE-123)."""
+    parts = (applicant_name or "Unbekannt").strip().split()
+    if len(parts) >= 2:
+        # Letztes Wort = Nachname, Rest = Vorname(n)
+        name = f"{parts[-1]}_{parts[0]}"
+    else:
+        name = parts[0] if parts else "Unbekannt"
+    return f"{name}_{case_id}".replace(" ", "_")
+
+
 async def _trigger_setup_case(case_id: str, outlook_message_id: str, applicant_name: str = ""):
     """Triggert n8n Setup-Case Webhook im Hintergrund (OneDrive + Attachment-Analyse)."""
     try:
@@ -664,6 +675,7 @@ async def _trigger_setup_case(case_id: str, outlook_message_id: str, applicant_n
                 "case_id": case_id,
                 "outlook_message_id": outlook_message_id,
                 "applicant_name": applicant_name,
+                "folder_name": _build_folder_name(applicant_name, case_id),
             })
             resp.raise_for_status()
             result = resp.json()

@@ -791,7 +791,7 @@ def _map_extracted_to_facts(doc_type: str, extracted: dict,
 
 # ── OneDrive Upload ──────────────────────────────────────────────
 
-def _upload_to_onedrive(case_id: str, filename: str, file_bytes: bytes, mime: str, onedrive_folder_id: str):
+def _upload_to_onedrive(case_id: str, filename: str, file_bytes: bytes, mime: str, onedrive_folder_id: str, doc_type: str = ""):
     """Upload a file to OneDrive via n8n webhook (best-effort, non-blocking)."""
     import httpx
 
@@ -812,6 +812,7 @@ def _upload_to_onedrive(case_id: str, filename: str, file_bytes: bytes, mime: st
                 "data_base64": b64,
                 "mime_type": mime,
                 "onedrive_folder_id": onedrive_folder_id,
+                "doc_type": doc_type or "",
             },
             timeout=60,
         )
@@ -956,7 +957,7 @@ class DocumentProcessor:
 
                     # Upload to OneDrive immediately after analysis (best-effort)
                     if upload_to_onedrive_folder and file_input.file_bytes:
-                        _upload_to_onedrive(case_id, fname, file_input.file_bytes, file_input.mime_type, upload_to_onedrive_folder)
+                        _upload_to_onedrive(case_id, fname, file_input.file_bytes, file_input.mime_type, upload_to_onedrive_folder, doc_type=doc_type)
 
                     _queue_update(case_id, fname, status="done", doc_type=doc_type, finished_at=datetime.utcnow().isoformat())
                     logger.info(f"[{case_id}] Analyzed: {fname} -> {doc_type}")

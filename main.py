@@ -2350,10 +2350,15 @@ Der Broker kann mehrere Overrides in einer Mail setzen, z.B. "ACCEPT_STALE Konto
     _case_for_response = cases.load_case(case_id)
     _applicant_name = _case_for_response.get("applicant_name", "") if _case_for_response else ""
 
+    # folder_name für n8n: Nachname_Vorname_CaseID
+    from dashboard import _build_folder_name
+    _folder_name = _build_folder_name(_applicant_name, case_id)
+
     return {
         "action": "processed",
         "case_id": case_id,
         "applicant_name": _applicant_name,
+        "folder_name": _folder_name,
         "is_new_case": is_new,
         "status": readiness_result.get("status") if readiness_result else "INTAKE",
         "onedrive_folder_id": request.onedrive_folder_id,

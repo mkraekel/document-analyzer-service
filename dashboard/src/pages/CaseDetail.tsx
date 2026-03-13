@@ -122,6 +122,8 @@ export function CaseDetail() {
   const [busy, setBusy] = useState(false)
   const [showAllDocs, setShowAllDocs] = useState(false)
   const [docFilterType, setDocFilterType] = useState('')
+  const [docSortField, setDocSortField] = useState<'file_name' | 'doc_type' | 'processed_at' | ''>('')
+  const [docSortAsc, setDocSortAsc] = useState(true)
   const [editingDocId, setEditingDocId] = useState<number | null>(null)
   const [editDocType, setEditDocType] = useState('')
 
@@ -314,9 +316,15 @@ export function CaseDetail() {
     }
   }
   const uniqueDocs = Array.from(docMap.values())
-  const filteredDocs = docFilterType
+  const filteredDocs = (docFilterType
     ? uniqueDocs.filter(d => d.doc_type === docFilterType)
     : uniqueDocs
+  ).slice().sort((a, b) => {
+    if (!docSortField) return 0
+    const va = (a[docSortField] || '').toLowerCase()
+    const vb = (b[docSortField] || '').toLowerCase()
+    return docSortAsc ? va.localeCompare(vb) : vb.localeCompare(va)
+  })
   const visibleDocs = showAllDocs ? filteredDocs : filteredDocs.slice(0, 20)
   const docTypes = [...new Set(uniqueDocs.map(d => d.doc_type).filter(Boolean))].sort()
 
@@ -856,10 +864,25 @@ export function CaseDetail() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-200">
-                    <th className="text-left py-2 px-3 text-xs font-medium text-gray-500">Datei</th>
-                    <th className="text-left py-2 px-3 text-xs font-medium text-gray-500">Typ</th>
-                    <th className="text-left py-2 px-3 text-xs font-medium text-gray-500">Status</th>
-                    <th className="text-left py-2 px-3 text-xs font-medium text-gray-500">Datum</th>
+                    {([['file_name', 'Datei'], ['doc_type', 'Typ'], ['', 'Status'], ['processed_at', 'Datum']] as const).map(([field, label]) => (
+                      <th
+                        key={label}
+                        className={`text-left py-2 px-3 text-xs font-medium text-gray-500 ${field ? 'cursor-pointer select-none hover:text-gray-700' : ''}`}
+                        onClick={() => {
+                          if (!field) return
+                          const f = field as 'file_name' | 'doc_type' | 'processed_at'
+                          if (docSortField === f) setDocSortAsc(!docSortAsc)
+                          else { setDocSortField(f); setDocSortAsc(true) }
+                        }}
+                      >
+                        <span className="inline-flex items-center gap-0.5">
+                          {label}
+                          {field && docSortField === field && (
+                            docSortAsc ? <ChevronUp size={12} /> : <ChevronDown size={12} />
+                          )}
+                        </span>
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
